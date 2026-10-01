@@ -1391,7 +1391,10 @@ if [ "$SKIP_TERRAFORM" = false ]; then
   # Try to get account_id from config file first
   if [ -f "$CONFIG_FILE" ]; then
     HARNESS_ACCOUNT_ID=$(grep "HARNESS_ACCOUNT_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
+    HARNESS_ORG_ID=$(grep "HARNESS_ORG_ID=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
   fi
+  # Org that holds the demo project (most accounts use "default"; partner accounts may differ)
+  HARNESS_ORG_ID=${HARNESS_ORG_ID:-default}
 
   # Try to get from se-parms.tfvars if not found
   if [ -z "$HARNESS_ACCOUNT_ID" ] && [ -f "kit/se-parms.tfvars" ]; then
@@ -1506,7 +1509,7 @@ if [ "$SKIP_TERRAFORM" = false ]; then
 
     # Make API call to check if project exists
     response=$(curl -s -w "\n%{http_code}" -X GET \
-      "https://app.harness.io/ng/api/projects/${identifier}?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=default" \
+      "https://app.harness.io/ng/api/projects/${identifier}?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=${HARNESS_ORG_ID}" \
       -H "x-api-key: ${HARNESS_PAT}" \
       -H "Content-Type: application/json" 2>/dev/null)
 
@@ -1517,6 +1520,23 @@ if [ "$SKIP_TERRAFORM" = false ]; then
     else
       return 1  # false - project doesn't exist (404 or other error)
     fi
+  }
+
+  # Function to find the identifier of an existing project by its display name
+  # (a project pre-created by an org admin may have an identifier that differs from name_to_identifier)
+  find_project_by_name() {
+    local name="$1"
+    curl -s -X GET \
+      "https://app.harness.io/ng/api/projects?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=${HARNESS_ORG_ID}&searchTerm=$(printf '%s' "$name" | sed 's/ /%20/g')&pageSize=50" \
+      -H "x-api-key: ${HARNESS_PAT}" 2>/dev/null \
+      | python3 -c 'import sys,json
+name=sys.argv[1]
+try:
+    for p in json.load(sys.stdin)["data"]["content"]:
+        if p["project"]["name"] == name:
+            print(p["project"]["identifier"]); break
+except Exception:
+    pass' "$name"
   }
 
   # Track if project name was set from Docker build section (custom name)
@@ -1585,13 +1605,25 @@ if [ "$SKIP_TERRAFORM" = false ]; then
       continue
     fi
 
+    # Reuse a project that already exists with this exact name (e.g. pre-created by an org admin
+    # when the user cannot create projects). Its identifier is taken from Harness, not derived.
+    print_info "Checking if project '$PROJECT_NAME' already exists in org '$HARNESS_ORG_ID'..."
+    EXISTING_IDENTIFIER=$(find_project_by_name "$PROJECT_NAME")
+    if [ -n "$EXISTING_IDENTIFIER" ]; then
+      PROJECT_IDENTIFIER="$EXISTING_IDENTIFIER"
+      REUSE_EXISTING_PROJECT=true
+      print_status "Found existing project '$PROJECT_NAME' (identifier: $PROJECT_IDENTIFIER) - it will be reused"
+      VALID_NAME=true
+      continue
+    fi
+    REUSE_EXISTING_PROJECT=false
+
     # Generate identifier from name
     PROJECT_IDENTIFIER=$(name_to_identifier "$PROJECT_NAME")
 
-    # Check if project already exists in Harness (only if Terraform state doesn't exist)
+    # Check for an identifier collision with a differently-named project (only if Terraform state doesn't exist)
     # If state exists, we're updating an existing project, not creating a new one
     if [ ! -f "kit/terraform.tfstate" ] || [ ! -s "kit/terraform.tfstate" ]; then
-      print_info "Checking if project '$PROJECT_NAME' already exists..."
       if project_exists "$PROJECT_IDENTIFIER"; then
         print_error "A project with identifier '$PROJECT_IDENTIFIER' already exists in your Harness account"
         print_info "Please choose a different project name"
@@ -1612,6 +1644,7 @@ if [ "$SKIP_TERRAFORM" = false ]; then
   {
     echo "DOCKER_USERNAME=$DOCKER_USERNAME"
     echo "HARNESS_ACCOUNT_ID=$HARNESS_ACCOUNT_ID"
+    echo "HARNESS_ORG_ID=$HARNESS_ORG_ID"
     echo "HARNESS_PAT=$HARNESS_PAT"
     echo "DOCKER_PAT=$DOCKER_PAT"
     echo "PROJECT_NAME=$PROJECT_NAME"
@@ -1630,6 +1663,8 @@ DOCKER_PAT = "$DOCKER_PAT"
 
 project_name = "$PROJECT_NAME"
 project_identifier = "$PROJECT_IDENTIFIER"
+
+org_id = "$HARNESS_ORG_ID"
 EOF
   print_status "Updated se-parms.tfvars with your configuration"
 
@@ -1748,6 +1783,19 @@ EOF
       cat "$TEMP_DIR/terraform_init.log" 2>/dev/null | tail -10
       cd ..
       exit 1
+    fi
+
+    # If reusing a pre-existing project, import it into IaC state so plan updates it rather than creating it
+    if [ "$REUSE_EXISTING_PROJECT" = true ] && ! $IAC_CMD state list 2>/dev/null | grep -q '^harness_platform_project.base_demo$'; then
+      print_info "Importing existing project '$PROJECT_IDENTIFIER' into $IAC_CMD state..."
+      if $IAC_CMD import -var="pat=$HARNESS_PAT" -var-file="se-parms.tfvars" harness_platform_project.base_demo "${HARNESS_ORG_ID}/${PROJECT_IDENTIFIER}" > "$TEMP_DIR/terraform_import.log" 2>&1; then
+        print_status "Project imported"
+      else
+        print_error "$IAC_CMD import failed"
+        cat "$TEMP_DIR/terraform_import.log" 2>/dev/null | tail -10
+        cd ..
+        exit 1
+      fi
     fi
 
     # Plan
