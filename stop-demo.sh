@@ -924,7 +924,20 @@ if [ "$DELETE_HARNESS_PROJECT" = true ]; then
             if [ "$SKIP_TERRAFORM" = false ]; then
               print_info "Running $IAC_CMD destroy (this may take 2-3 minutes)..."
 
+              DESTROY_OK=false
               if $IAC_CMD destroy -var="pat=$HARNESS_PAT" $TFVARS_ARG -auto-approve; then
+                DESTROY_OK=true
+              else
+                # Harness can briefly report a connector as "referenced" right after the template/
+                # service that used it was deleted; one retry after a short pause clears it
+                print_info "Some resources couldn't be deleted yet - retrying in 15 seconds..."
+                sleep 15
+                if $IAC_CMD destroy -var="pat=$HARNESS_PAT" $TFVARS_ARG -auto-approve; then
+                  DESTROY_OK=true
+                fi
+              fi
+
+              if [ "$DESTROY_OK" = true ]; then
                 print_status "Harness resources destroyed successfully via $IAC_CMD"
                 TERRAFORM_SUCCESS=true
                 HARNESS_DELETE_SUCCESS=true

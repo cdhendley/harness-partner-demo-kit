@@ -1797,21 +1797,23 @@ EOF
 
     # Wait for init to complete (should already be done or nearly done)
     print_info "Waiting for $IAC_CMD init to complete..."
+    INIT_EXIT=1
     if wait_with_spinner $TERRAFORM_INIT_PID "Initializing $IAC_CMD providers..."; then
       INIT_EXIT=$(cat "$TEMP_DIR/terraform_init.exit" 2>/dev/null || echo "1")
-      if [ "$INIT_EXIT" = "0" ]; then
+    fi
+    if [ "$INIT_EXIT" = "0" ]; then
+      print_status "$IAC_CMD initialized"
+    else
+      # The background init occasionally fails without output; retry once in the foreground
+      print_info "$IAC_CMD init did not complete in the background - retrying..."
+      if $IAC_CMD init > "$TEMP_DIR/terraform_init.log" 2>&1; then
         print_status "$IAC_CMD initialized"
       else
         print_error "$IAC_CMD init failed"
-        cat "$TEMP_DIR/terraform_init.log" 2>/dev/null | tail -10
+        tail -10 "$TEMP_DIR/terraform_init.log" 2>/dev/null
         cd ..
         exit 1
       fi
-    else
-      print_error "$IAC_CMD init failed"
-      cat "$TEMP_DIR/terraform_init.log" 2>/dev/null | tail -10
-      cd ..
-      exit 1
     fi
 
     # If reusing a pre-existing project, import it into IaC state so plan updates it rather than creating it
