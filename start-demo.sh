@@ -1673,6 +1673,11 @@ except Exception:
   if [ "$REUSE_EXISTING_PROJECT" = true ] && ! grep -q '"harness_platform_project"' kit/terraform.tfstate 2>/dev/null; then
     PROJECT_PREEXISTING=true
   fi
+  # Reusing a project but no saved answer (e.g. .demo-config was deleted): we can't tell who
+  # created it, so err on the side of never deleting it
+  if [ "$REUSE_EXISTING_PROJECT" = true ] && ! grep -q "^PROJECT_PREEXISTING=" "$CONFIG_FILE" 2>/dev/null; then
+    PROJECT_PREEXISTING=true
+  fi
   PROJECT_PREEXISTING=${PROJECT_PREEXISTING:-false}
 
   # Catch token/permission/collision problems now, not as a 403 halfway through Terraform

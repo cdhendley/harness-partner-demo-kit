@@ -74,7 +74,7 @@ If a check fails the script explains the fix and asks *Continue anyway? [y/N]*. 
 
 ## 6. Safe cleanup
 
-When the kit reuses a project it didn't create, it records `PROJECT_PREEXISTING=true`. `stop-demo.sh` treats such a project — or any run with a participant ID — as shared: it removes `harness_platform_project` from Terraform state before `destroy` (so only that user's resources are destroyed), refuses the API "delete project" fallback, uses `HARNESS_ORG_ID` instead of `default`, and deletes that participant's pipeline. Verified on a copy of a real state: `plan -destroy` went from 14 resources (including the project) to 13.
+When the kit reuses a project it didn't create, it records `PROJECT_PREEXISTING=true` (and if that saved answer is missing — for example `.demo-config` was deleted — a reused project is treated as pre-existing, so it can never be deleted by mistake). `stop-demo.sh` treats such a project — or any run with a participant ID — as shared: it removes `harness_platform_project` from Terraform state before `destroy` (so only that user's resources are destroyed), refuses the API "delete project" fallback, uses `HARNESS_ORG_ID` instead of `default`, and deletes that participant's pipeline. Verified on a copy of a real state: `plan -destroy` went from 14 resources (including the project) to 13.
 
 `stop-demo.sh` also no longer `source`s `.demo-config` (a value containing a space, like the default project name, would run as a command), and its "fresh start" now uses `colima delete -f --data`.
 

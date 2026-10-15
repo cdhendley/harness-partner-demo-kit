@@ -4,6 +4,8 @@ A start-to-finish checklist. Do the steps in order; each one says how to confirm
 
 If several people are sharing one Harness project (a workshop), the **workshop lead** does [Part A](#part-a-workshop-lead-once-for-everyone) first, and everyone else starts at [Part B](#part-b-everyone-before-running-the-script).
 
+**Already ran `./start-demo.sh` and it failed?** Go to [Part F](#part-f-already-ran-it-and-it-failed).
+
 ---
 
 ## Part A: Workshop lead (once, for everyone)
@@ -131,6 +133,75 @@ Then follow the labs in order, starting with Lab 0's verification section.
 - Experienced users can pre-answer questions with flags (`--skip-docker-build`, `--skip-terraform`, `--skip-delegate`, `--org <id>`, `--participant <id>`, `--colima-arch native|amd64`); nobody *needs* them.
 - **Stop for the day**: `./stop-demo.sh` → option 1. Your Harness resources stay.
 - **Remove your Harness resources**: `./stop-demo.sh --delete-harness-project`. In a shared or admin-created project this removes **only your** resources — the project itself and other people's resources are never deleted.
+
+---
+
+## Part F: Already ran it and it failed?
+
+Re-running `./start-demo.sh` is safe: it reuses what already exists and only creates what's missing. Don't delete the Harness project or files in the repo to "start clean" — fix the cause below, then run it again (when asked about the existing Terraform state, answer **2** to re-run Terraform).
+
+**First, make sure you have the current version of the kit.** Older copies don't have the pre-flight checks, organization prompt, shared-project support or automatic delegate install, and fail in the ways described below. From the repo folder: `git pull` (or `git checkout <branch>` if your lead gave you one), then re-run.
+
+Find the error text you saw:
+
+### `403 Forbidden` — usually on `harness_platform_project.base_demo: Creating...`
+
+The Harness token can't do what Terraform asked. In order of likelihood:
+
+1. **You created an API key but not a token.** A key on its own isn't usable. Profile → **My API Keys & Tokens** → your key → **+ Token** → copy the `pat.…` value. When the script asks for the Harness PAT, paste the token.
+2. **The token is from a different Harness account.** If your login belongs to several accounts, switch to the project's account in the UI *before* creating the token. The second part of the token (`pat.<THIS PART>.…`) must equal your account ID.
+3. **The project already exists and you aren't allowed to create projects.** Enter the project's **display name exactly** (as shown in Harness) when asked; the script then reuses it instead of trying to create one. You need Project Admin on it — ask your lead.
+4. **Wrong organization.** Older versions assumed an org named `default`. Re-run and pick the right org from the numbered list.
+
+The current script checks all four before Terraform runs and tells you which one it is.
+
+### `401 Unauthorized`, or *"token is not valid"*
+
+The token expired, was revoked, or is an API key. Create a new token (B3) and paste it when the script asks — it re-asks automatically when the saved one stops working.
+
+### *"Connector … already exists"* / Terraform says a resource *already exists*
+
+Someone else in the project already created resources with your names — usually you both left the participant ID empty, or picked the same ID. Re-run; the script detects this and asks you for a different participant ID. Get a unique one from your lead.
+
+### *"Access denied to harness-community/partner-demo-kit at github"*
+
+Harness couldn't import the demo code repository from GitHub. This has been transient: re-run, answer **2** to re-run Terraform, and it normally succeeds the second time.
+
+### *"terraform init failed"* with no other output
+
+Seen once, cause unknown; the current script retries automatically. If it still fails, re-run.
+
+### Docker login fails (*unauthorized* / *incorrect username or password*)
+
+Use a Docker Hub **access token** (B4), not your password, and check the username. To be asked for everything again, delete the saved answers with `rm .demo-config` and re-run.
+
+### Everything is extremely slow, or *"connection to the server … was refused"* (Apple Silicon)
+
+Your Colima VM is probably running in **amd64 emulation** (software-emulated x86 — very slow, and it has crashed mid-build). Re-run and choose **1) Native arm64** at the Colima question. Switching rebuilds the Colima VM and its Kubernetes cluster from scratch (your Harness resources are untouched; the script redeploys the local pieces). The first rebuild takes a few minutes.
+
+### http://localhost:30001 doesn't load
+
+- Re-run `./start-demo.sh` — it deploys the docs on every run.
+- If the docs image was never built (your first run failed before the build), answer **Y** to *Build images?*.
+- Check the pod: `kubectl get pods -l app=docs` should show `1/1 Running`.
+- On Apple Silicon, if `kubectl get nodes` fails, your Colima VM may have stopped or restarted: see the previous item.
+
+### Delegate missing, not connected, or connector tests fail
+
+- Re-run `./start-demo.sh`; it detects a missing delegate and offers to install it (answer **Y**).
+- If you installed it by hand: the delegate name must be exactly the one your connectors use (`<participant>-k8s-delegate`, or `local-k8s-delegate` with no participant ID). A delegate with any other name installs and connects but connector tests fail. Running only the two `helm repo …` lines doesn't install anything — the long `helm upgrade -i …` command is the install.
+- A new delegate needs 1–3 minutes before it shows **Connected**.
+
+### *"helm: command not found"* / *"docker buildx … unknown"*
+
+Install the tools from B2 (on a Mac, including the `ln -sfn` line for buildx), then re-run.
+
+### Still stuck?
+
+Send your lead:
+- the last ~30 lines of the script's output (the error and what came just before it);
+- the first two parts of your token only (`pat.<account>.…`) — **never the whole token**;
+- your org, project name and participant ID.
 
 ---
 
