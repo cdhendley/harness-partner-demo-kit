@@ -9,12 +9,12 @@ This lab adds Continuous Verification (CV) to your backend canary deployment. Ha
 - Completed Lab 4 (Backend Deployment)
 - Backend service deployed with canary strategy
 - Prometheus running in your Kubernetes cluster
-- Monitored service `backend_dev` created by Terraform
+- Monitored service `backend_dev{{ID}}` created by Terraform
 
 > **About the Monitored Service**:
 >
-> The Monitored Service (`backend_dev`) was **automatically created by Terraform** during setup. This service:
-> - Links the `backend` service to the `Dev` environment
+> The Monitored Service (`backend_dev{{ID}}`) was **automatically created by Terraform** during setup. This service:
+> - Links the `backend{{NAME}}` service to the `Dev{{NAME}}` environment
 > - Configures Prometheus as the health source
 > - Defines which metrics to collect and analyze
 > - Sets up the ML baseline for anomaly detection
@@ -152,7 +152,7 @@ You should see:
 - **Prometheus integration** provides metrics for analysis without additional instrumentation
 - **Automated rollback** reduces risk by catching issues before full rollout
 - **Sensitivity tuning** allows you to balance between false positives and detection accuracy
-- **Monitored services** (like `backend_dev`) define which metrics to analyze
+- **Monitored services** (like `backend_dev{{ID}}`) define which metrics to analyze
 
 ## What You've Built
 

@@ -12,7 +12,7 @@
 
 ## Create new Policy to require approval for Production releases
 > **Policy Name**
-> - Name: <pre>`Production Approval`</pre>
+> - Name: <pre>`Production Approval{{NAME}}`</pre>
 > - Store: `Inline`
 
 > [!NOTE]
@@ -60,13 +60,13 @@ contains(arr, elem) {
 >
 > **Policy Set**
 > - **Overview**
->   - Name: <pre>`Approval Required for Production Deployments`</pre>
+>   - Name: <pre>`Approval Required for Production Deployments{{NAME}}`</pre>
 >   - Entity Type: `Pipeline`
 >   - Evaluation: `On Save`
 >   - Click **Continue**
 > - **Policy evaluation criteria**
 >   - Click : `+ Add Policy`
->   - Policy to Evaluate: `Production Approval`
+>   - Policy to Evaluate: `Production Approval{{NAME}}`
 >   - Policy Action: `Error and exit`
 >   - Click **Apply**
 > - Click **Finish** to save your **Policy Set**
@@ -81,8 +81,10 @@ contains(arr, elem) {
 > 1) Select the ***Frontend - Deployment*** stage \
 >     ![](https://raw.githubusercontent.com/harness-community/field-workshops/main/assets/images/pipeline_tab_environment.png)
 > 2) Click on the  **Environment** tab
->   - Specify Environment: `prod`
->   - Specify Infrastructure: `K8s Prod`
+>   - Specify Environment: `Prod{{NAME}}`
+>   - Specify Infrastructure: `K8s Prod{{NAME}}`
+
+> **Note**: The setup script does not create a `K8s Prod{{NAME}}` infrastructure definition; create one in the `Prod{{NAME}}` environment (same settings as `K8s Dev{{NAME}}`) before this step.
 
 > Click **Save** in the top right to save your pipeline. <br>
 > ![](https://raw.githubusercontent.com/harness-community/field-workshops/main/assets/images/pipeline_save.png)

@@ -22,7 +22,7 @@ This **Partner Demo Kit** includes two parts:
 
 ## Overview
 
-This guide helps you get started with the Harness Partner Demo Kit. The setup process is automated through a script that handles all infrastructure and Harness resource provisioning. You'll then install a Harness delegate before proceeding with the individual labs.
+This guide helps you get started with the Harness Partner Demo Kit. The setup process is automated through a script that handles all infrastructure, Harness resource provisioning, and the Harness delegate installation. You'll then verify everything before proceeding with the individual labs.
 
 ## Prerequisites
 
@@ -42,7 +42,8 @@ Before starting, ensure you have:
    - Docker Engine running
    - Kubernetes cluster: Colima (macOS Apple Silicon), minikube, Docker Desktop, or Rancher Desktop
    - Terraform installed
-   - kubectl and helm installed
+   - kubectl and helm installed (helm is used to install the Harness delegate)
+   - Docker buildx (BuildKit) for multi-architecture image builds — Docker Desktop includes it; with Homebrew's `docker` CLI run `brew install docker-buildx` (the setup script offers to do this)
    - Git client installed
    - **Windows Users**: Git Bash (included with Git for Windows) or WSL2 required to run setup scripts
 
@@ -69,6 +70,11 @@ The script will prompt you for:
 - Harness Account ID
 - Harness API token (`pat.*` from **+ Token** under your API key)
 - Docker Hub username and password
+- Your Harness project name (an existing project is reused — enter its exact display name)
+- A **participant ID** — only needed when several people share one Harness project (see below)
+- **Apple Silicon Macs only**: whether Colima runs natively (arm64, recommended) or emulates amd64
+
+> **Sharing one project with other people?** Each person picks a short participant ID (lowercase letters/digits, e.g. `casey`). Everything the kit creates gets that ID appended — connectors, environments, the backend service, the code repository, and your delegate (`casey-k8s-delegate`) — so nobody collides. These lab guides are personalized with *your* names automatically. If you are the only person using the project, leave the participant ID empty.
 
 > **Important**: Creating an API key is not enough — you must click **+ Token** on the key and copy the token value. If you only see an API key with no tokens listed under it, setup and cleanup will fail with authentication errors.
 
@@ -86,8 +92,9 @@ The automated setup configured your complete demo environment:
 1. **Detected and Started Kubernetes** - Identified your cluster (Colima, minikube, Docker Desktop, or Rancher Desktop) and ensured it's running
 2. **Deployed Prometheus** - Installed Prometheus in the `monitoring` namespace for continuous verification
 3. **Built and Pushed Docker Images** - Created the backend application, testing, and docs Docker images and pushed them to your Docker Hub
-4. **Provisioned Harness Resources** - Used Terraform to create the "Base Demo" project with all connectors, environments, services, pipelines, and monitored services
-5. **Saved Your Configuration** - Stored credentials in `.demo-config` for subsequent runs
+4. **Provisioned Harness Resources** - Used Terraform to create (or reuse) the "Base Demo" project with all connectors, environments, services, and monitored services
+5. **Installed the Harness Delegate** - Installed `{{DELEGATE}}` into your cluster with Helm and waited for it to connect
+6. **Saved Your Configuration** - Stored credentials in `.demo-config` for subsequent runs
 
 ## Access the Demo Documentation
 
@@ -124,7 +131,7 @@ Now that setup is complete, access your Harness account to verify resources:
 
 ## Verify Your Setup
 
-Before installing the delegate, verify that Terraform created all required resources:
+Verify that the setup created all required resources:
 
 ### Harness Resources in "Base Demo" Project
 
@@ -133,7 +140,7 @@ Navigate to the **"Base Demo"** project and verify:
 **Code Repository:**
 - Using the module selection button ![](images/2026-01-07_10-33-10.jpg)
 - Choose the **Code Repository** module
-- Verify `partner_demo_kit` repository exists
+- Verify `partner_demo_kit{{ID}}` repository exists
 
 **Continuous Delivery & Git Ops**
 - Next, using the module selection button again, choose the **Continuous Delivery & Git Ops** module
@@ -142,29 +149,27 @@ Navigate to the **"Base Demo"** project and verify:
 **Connectors:**
 - On the left-side menu, go to **Project Settings** > **Connectors**
 - Verify these connectors exist:
-  - `workshopdocker` - Docker Hub connector
-    - Should show Success
-  - `workshop_k8s` - Kubernetes connector (for local cluster)
-    - Will show "Failed" for now as we haven't installed a delegate yet
-  - Prometheus connector (for continuous verification)
-    - Will show "Failed" for now as we haven't installed a delegate yet
+  - `Workshop Docker{{NAME}}` (`workshopdocker{{ID}}`) - Docker Hub connector
+  - `Workshop K8s{{NAME}}` (`workshop_k8s{{ID}}`) - Kubernetes connector (for your local cluster)
+  - `Prometheus{{NAME}}` (`prometheus{{ID}}`) - Prometheus connector (for continuous verification)
+  - All should show **Success** once your delegate is connected (see below)
 
 **Environments:**
 - Go to **Environments**
-- Verify `Dev` environment exists
-- Click into Dev environment and verify `K8s Dev` infrastructure definition exists
+- Verify `Dev{{NAME}}` environment exists
+- Click into it and verify `K8s Dev{{NAME}}` infrastructure definition exists
 
 **Services:**
 - Go to **Services**
-- Verify `backend` service exists and is configured with K8s manifests
+- Verify `backend{{NAME}}` service exists and is configured with K8s manifests
 
 **Templates:**
 - Go to **Templates** (under Project Settings)
-- Verify `Compile Application` step template exists
+- Verify `Compile Application{{NAME}}` step template exists
 
 **Monitored Services:**
 - Go to **Monitored Services**
-- Verify `backend_dev` monitored service exists for continuous verification
+- Verify `backend_dev{{ID}}` monitored service exists for continuous verification
 
 ### Local Infrastructure
 
@@ -179,62 +184,43 @@ kubectl cluster-info
 **Prometheus:**
 ```bash
 kubectl get pods -n monitoring
-# Should see prometheus-k8s-0 pod running
+# Should see a prometheus-deployment-... pod Running
 ```
 
-## Install Harness Delegate
+## Harness Delegate
 
-The Harness Delegate is required to execute pipelines and connect to your local Kubernetes cluster. Install it at the **project level** using Helm:
+The Harness Delegate runs in your local cluster and lets Harness deploy to it and reach Prometheus. **The setup script installs it for you** as `{{DELEGATE}}` — the name your connectors are configured to use — and waits until Harness shows it connected.
 
-### 1. Navigate to Delegate Installation
+### Verify the Delegate
 
-1. In the Harness UI, make sure your **Base Demo** project is selected in the scope box.
-2. Select **Project Settings** on the left menu
-3. Click **Delegates**
-   ![](images/2025-12-15_15-47-36.jpg)
-
-4. Click **Install a Delegate** (or **New Delegate** if you have existing delegates)
-
-### 2. Configure Delegate Settings
-
-> **Important**: Copy the exact command from the Harness UI as it includes your account-specific details.
-
-1. **Select delegate type**: Choose **Kubernetes**
-2. **Select installation method**: Choose **Helm Chart**
-3. **Name your delegate**: It must be `local-k8s-delegate` for the pre-created connectors to work.
-4. **Copy and paste**: the 2 lines to add the chart repo to the local helm registry in your terminal.
-5. **Copy and paste**: directions in your local terminal (where your k8s cluster is running) to install the delegate
-6. After a minute or so, click **Verify**
-
-![](images/2025-12-15_15-55-59.jpg)
-
-7. Click **Done** once verified.
-
-### 3. Verify Delegate Installation
-
-**Check delegate pod status:**
+**Check the pod:**
 ```bash
 kubectl get pods -n harness-delegate-ng
-
-# Wait for pod to show STATUS: Running (may take 1-2 minutes)
+# Expect a {{DELEGATE}}-... pod with READY 1/1 and STATUS Running (allow 1-2 minutes)
 ```
 
-**Verify delegate is connected in Harness UI:**
-1. Stay on the Delegates page in Harness
-2. Wait for your delegate to appear in the delegates list (refresh if needed)
-3. Status should show **Connected** with a green indicator
+**Check in Harness:** **Project Settings** > **Delegates** — `{{DELEGATE}}` should show **Connected**.
 
-> **Note**: If the delegate doesn't connect within 2-3 minutes, check the pod logs: `kubectl logs -n harness-delegate-ng <pod-name>`
-
-### 5. Verify Delegate Functionality
-
-Test that the delegate can access your local Kubernetes cluster:
+### Verify Delegate Functionality
 
 1. Go to **Project Settings** > **Connectors** in the "Base Demo" project
-2. Click on the `workshop_k8s` connector
-3. Click **Test Connection** (top right)
-4. Repeat steps 1-3 for the `prometheus` connector
-5. The tests should succeed, confirming the delegate can communicate from your local cluster to Harness
+2. Click the `Workshop K8s{{NAME}}` connector, then **Test Connection** (top right)
+3. Repeat for `Prometheus{{NAME}}`
+4. Both tests should succeed, confirming Harness can reach your local cluster through the delegate
+
+### Installing the Delegate Manually (only if the script couldn't)
+
+Use **Project Settings** > **Delegates** > **New Delegate** > **Kubernetes** > **Helm Chart**. The page shows three commands; you need **all three**:
+
+1. `helm repo add harness-delegate …` — registers the chart repository. `harness-delegate` here is only a local name for the repository; **don't change it**.
+2. `helm repo update harness-delegate` — refreshes it.
+3. The long `helm upgrade -i … --set …` command — **this is the one that actually installs the delegate**. It looks like a list of settings, but it is the install.
+
+Before running the third command, make sure **both** of these say `{{DELEGATE}}` (the page may still show its default name even after you rename the delegate):
+- the release name right after `helm upgrade -i`
+- `--set delegateName=…`
+
+The connectors only find a delegate with exactly that name. A wrong name still installs and connects, but connector tests and deployments fail later with "no delegate available".
 
 ## Troubleshooting
 
@@ -309,12 +295,12 @@ kubectl -n monitoring apply -f ./kit/prometheus.yml
 
 ### Connector Test Failures
 
-**workshop_k8s connector fails:**
+**Workshop K8s{{NAME}} connector fails:**
 - Verify delegate is connected
 - Check delegate has access to your local cluster
 - Test manually: `kubectl get nodes`
 
-**workshop-docker connector fails:**
+**Workshop Docker{{NAME}} connector fails:**
 - Verify Docker Hub credentials in Harness secrets
 - Test manually: `docker login`
 - Ensure Docker Hub repository `harness-demo` exists
@@ -343,7 +329,7 @@ Now that you've completed the setup and installed the delegate, you're ready to 
 
 **Throughout the Demo:**
 - All activities take place in the **"Base Demo"** project
-- The `partner_demo_kit` repository in Harness Code Repository is mirrored from GitHub
+- The `partner_demo_kit{{ID}}` repository in Harness Code Repository is mirrored from GitHub
 - You'll generate Git credentials for the Harness Code Repository in Lab 1
 - Your local Kubernetes cluster and Prometheus must remain running
 

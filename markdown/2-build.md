@@ -18,7 +18,7 @@ This lab walks through creating a complete CI pipeline with test intelligence, c
    ![](images/2025-12-12_13-23-44.jpg)
 3. Click **Pipelines** in the "Base Demo" project (close the wizard if displayed)
 4. Click **+ Create Pipeline**
-   - **Name**: `Workshop Build and Deploy`
+   - **Name**: `Workshop Build and Deploy{{NAME}}`
    - **Store**: Inline (for simplicity)
 5. Click **Start**
 
@@ -32,7 +32,7 @@ This lab walks through creating a complete CI pipeline with test intelligence, c
 3. Configure the build stage:
    - **Stage Name**: `Build`
    - **Clone Codebase**: Enable
-   - **Repository Name**: `partner_demo_kit` (the Harness Code repository created by Terraform)
+   - **Repository Name**: `partner_demo_kit{{ID}}` (the Harness Code repository created by Terraform)
    ![](images/2025-12-15_15-12-17.jpg)
 4. Click **Set Up Stage**
 
@@ -72,7 +72,7 @@ If you do not wish to use Harness Cloud, you can use your local Kubernetes clust
 1. On the **Infrastructure** tab
 2. Select **Kubernetes**
 3. Configure:
-   - **Connector**: `workshop_k8s` (created by Terraform)
+   - **Connector**: `workshop_k8s{{ID}}` (created by Terraform)
    - **Namespace**: `harness-delegate-ng` (or your delegate namespace)
 4. Click **Continue**
 
@@ -97,7 +97,7 @@ If you do not wish to use Harness Cloud, you can use your local Kubernetes clust
      pytest --junitxml=reports/junit.xml --html=reports/report.html --cov=. --cov-report=xml:reports/coverage.xml
      ```
    - Expand the `Optional Configuration`
-   - **Container Registry**: `Workshop Docker`
+   - **Container Registry**: `Workshop Docker{{NAME}}`
    - **Image**: `dockerhubaccountid/harness-demo:test-latest`
      - ⚠️ Use `test-latest` tag (NOT `backend-latest`) - this image has pytest pre-installed
 
@@ -140,7 +140,7 @@ If you do not wish to use Harness Cloud, you can use your local Kubernetes clust
 
 1. Click **+ Add Step**
 2. Select **Use Template**
-3. Select the **"Compile Application"** template (created by Terraform)
+3. Select the **"Compile Application{{NAME}}"** template (created by Terraform)
 4. Select **Use Template**
 5. Configure:
    - **Name**: `Compile`
@@ -160,7 +160,7 @@ If you do not wish to use Harness Cloud, you can use your local Kubernetes clust
 2. Select **Add Step** > **Build and Push an image to Docker Registry**
 3. Configure:
    - **Name**: `Push to Dockerhub`
-   - **Docker Connector**: `Workshop Docker` (created by Terraform)
+   - **Docker Connector**: `Workshop Docker{{NAME}}` (created by Terraform)
    - **Docker Repository**: `dockerhubaccountid/harness-demo`
    - **Tags**: Click **+ Add**
      - Add: `demo-base-<+pipeline.sequenceId>`

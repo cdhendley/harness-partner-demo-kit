@@ -24,8 +24,8 @@ This lab adds backend deployment using a Canary deployment strategy. Unlike the 
 On the **Service** tab:
 
 1. Click **Select Service** (not "Add Service" - it already exists!)
-2. Select **backend** (this was pre-configured by Terraform)
-3. **CRITICAL**: Click on the **backend** service name to edit it
+2. Select **backend{{NAME}}** (this was pre-configured by Terraform)
+3. **CRITICAL**: Click on the **backend{{NAME}}** service name to edit it
 4. Navigate to the **Artifacts** section
 5. Click **Edit** (pencil icon) on the artifact source
 6. Update the **Image Path** to: `dockerhubaccountid/harness-demo`
@@ -50,14 +50,14 @@ On the **Service** tab:
 > The backend service was **pre-configured by Terraform** to demonstrate how platform teams can create reusable service templates. This service includes:
 >
 > **Kubernetes Manifests** (from Harness Code Repository):
-> - **Repository**: `partner_demo_kit`
+> - **Repository**: `partner_demo_kit{{ID}}`
 > - **Manifest Path**: `harness-deploy/backend/manifests/`
 > - **Values File**: `harness-deploy/backend/values.yaml`
 > - These manifests define the backend deployment, service, and configuration
 >
 > **Docker Artifact Configuration**:
 > - **Artifact Source**: Docker Registry
-> - **Connector**: `workshop-docker` (reusing the connector from the frontend)
+> - **Connector**: `Workshop Docker{{NAME}}` (reusing the connector from the frontend)
 > - **Image Path**: `dockerhubaccountid/harness-demo` (you just updated this!)
 > - **Tag**: `backend-latest`
 > - This points to the backend Docker image you built during setup
@@ -83,8 +83,8 @@ On the **Environment** tab:
 > Instead of manually selecting the environment and infrastructure again, we're **propagating** from the frontend stage. This means:
 >
 > **What's Being Inherited**:
-> - **Environment**: `Dev` (created by Terraform)
-> - **Infrastructure**: `K8s Dev` (Kubernetes cluster connector)
+> - **Environment**: `Dev{{NAME}}` (created by Terraform)
+> - **Infrastructure**: `K8s Dev{{NAME}}` (Kubernetes cluster connector)
 > - **All environment variables** and configurations
 >
 > **Benefits of Propagation**:

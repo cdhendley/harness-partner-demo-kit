@@ -8,7 +8,7 @@ This lab extends your CI pipeline with a deployment stage for the frontend appli
 ## Prerequisites
 - Completed Lab 2 (CI Pipeline)
 - Kubernetes cluster running (Colima for Apple Silicon, minikube, or Rancher Desktop)
-- "Base Demo" project with Dev environment and K8s Dev infrastructure (created by Terraform)
+- "Base Demo" project with Dev{{NAME}} environment and K8s Dev{{NAME}} infrastructure (created by Terraform)
 
 ## Step 1: Add a Deploy Stage
 
@@ -27,7 +27,7 @@ On the **Service** tab:
 2. Configure the new service:
 
 **About the Service:**
-- **Name**: `frontend`
+- **Name**: `frontend{{NAME}}`
 - **Store**: Inline
 
 **Service Definition:**
@@ -40,7 +40,7 @@ On the **Service** tab:
 3. **Manifest Source**: `Harness Code` (Code Repository)
 4. **Manifest Details**:
    - **Manifest Identifier**: `templates`
-   - **Repository Name**: `partner_demo_kit`
+   - **Repository Name**: `partner_demo_kit{{ID}}`
    - **Branch**: `main`
    - **File/Folder Path**: `harness-deploy/frontend/manifests`
    - **Values.yaml**: Click **+ Add File**
@@ -51,7 +51,7 @@ On the **Service** tab:
 
 1. Click **+ Add Artifact Source**
 2. **Artifact Repository Type**: `Docker Registry`
-3. **Docker Registry Connector**: `workshop-docker` (created by Terraform)
+3. **Docker Registry Connector**: `Workshop Docker{{NAME}}` (created by Terraform)
 4. **Artifact Location**:
    - **Artifact Source Identifier**: `frontend`
    - **Image Path**: `dockerhubaccountid/harness-demo`
@@ -65,8 +65,8 @@ On the **Service** tab:
 
 On the **Environment** tab:
 
-1. **Specify Environment**: `Dev` (created by Terraform)
-2. **Specify Infrastructure**: `K8s Dev` (created by Terraform)
+1. **Specify Environment**: `Dev{{NAME}}` (created by Terraform)
+2. **Specify Infrastructure**: `K8s Dev{{NAME}}` (created by Terraform)
 3. Click **Continue**
 
 > **Note**: Platform teams can create and manage environments and infrastructure, then developers can easily use them for deployments. This promotes consistency and reduces setup time.
