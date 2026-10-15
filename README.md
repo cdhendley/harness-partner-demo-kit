@@ -313,6 +313,9 @@ The `start-demo.sh` script automates the **complete demo setup** from local infr
 # Skip the automatic Harness delegate install
 ./start-demo.sh --skip-delegate
 
+# Pre-answer the organization question
+./start-demo.sh --org my_org
+
 # Set a participant ID (for sharing one Harness project - see below)
 ./start-demo.sh --participant alice
 
@@ -323,6 +326,8 @@ The `start-demo.sh` script automates the **complete demo setup** from local infr
 # Combine options
 ./start-demo.sh --skip-docker-build --skip-terraform
 ```
+
+All of these are optional: the script asks for every setting interactively (organization, project, participant ID, Colima mode, whether to build images, delegate install) and offers your previous answers as defaults. Flags only pre-answer those questions.
 
 Shared helper functions live in [scripts/demo-lib.sh](scripts/demo-lib.sh) (bash 3.2 compatible, so it runs with the macOS system bash).
 

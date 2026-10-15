@@ -134,9 +134,12 @@ chmod +x start-demo.sh stop-demo.sh
 ./start-demo.sh --skip-docker-build   # Skip image builds (docs still deploy from the existing image)
 ./start-demo.sh --skip-terraform      # Skip Harness resource creation
 ./start-demo.sh --skip-delegate       # Skip the automatic Harness delegate install
+./start-demo.sh --org <identifier>    # Harness organization (otherwise chosen from a prompted list)
 ./start-demo.sh --participant <id>    # Participant ID for a shared Harness project
 ./start-demo.sh --colima-arch native|amd64   # Apple Silicon Colima VM architecture (default: native)
 ```
+
+Every setting is also prompted interactively (previous answers from `.demo-config` are the defaults); flags only pre-answer prompts. Don't add flag-only or env-var-only settings: inexperienced users forget them.
 
 Shared helpers live in [scripts/demo-lib.sh](scripts/demo-lib.sh) (bash 3.2 compatible).
 

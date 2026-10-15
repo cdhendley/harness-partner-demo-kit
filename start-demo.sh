@@ -15,7 +15,8 @@
 # - Harness delegate installation (Helm), named to match the connectors
 #
 # Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform] [--skip-delegate]
-#                        [--participant <id>] [--colima-arch native|amd64]
+#                        [--org <identifier>] [--participant <id>] [--colima-arch native|amd64]
+# Every setting is also asked interactively (flags only pre-answer the question).
 #
 
 set -e  # Exit on error
@@ -70,6 +71,8 @@ SKIP_TERRAFORM=false
 SKIP_DELEGATE=false
 PARTICIPANT_FLAG=""
 COLIMA_MODE_FLAG=""
+ORG_FLAG=""
+SKIP_DOCKER_BUILD_FLAG=false
 CONFIG_FILE=".demo-config"
 PROJECT_NAME=""
 PROJECT_IDENTIFIER=""
@@ -89,6 +92,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --skip-docker-build)
       SKIP_DOCKER_BUILD=true
+      SKIP_DOCKER_BUILD_FLAG=true
       shift
       ;;
     --skip-terraform)
@@ -108,9 +112,13 @@ while [[ $# -gt 0 ]]; do
       COLIMA_MODE_FLAG="${2:-}"
       shift 2
       ;;
+    --org)
+      ORG_FLAG="${2:-}"
+      shift 2
+      ;;
     *)
       echo -e "${RED}Unknown option: $1${NC}"
-      echo "Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform] [--skip-delegate] [--participant <id>] [--colima-arch native|amd64]"
+      echo "Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform] [--skip-delegate] [--org <identifier>] [--participant <id>] [--colima-arch native|amd64]"
       exit 1
       ;;
   esac
@@ -145,31 +153,38 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/scripts/demo-lib.sh"
 
 # Participant ID: lets several people share one Harness project without collisions.
-# Order: --participant flag > PARTICIPANT_ID in .demo-config (if ever answered) > prompt.
+# Asked on every run (previous answer is the default); --participant pre-answers it.
 ensure_participant_id() {
   if [ "$PARTICIPANT_RESOLVED" = true ]; then
     return 0
   fi
+  local previous ans
+  previous=$(config_get "$CONFIG_FILE" PARTICIPANT_ID)
   if [ "$PARTICIPANT_FLAG_SET" = true ]; then
     PARTICIPANT_ID="$PARTICIPANT_FLAG"
-  elif grep -q "^PARTICIPANT_ID=" "$CONFIG_FILE" 2>/dev/null; then
-    PARTICIPANT_ID=$(config_get "$CONFIG_FILE" PARTICIPANT_ID)
   else
     echo ""
-    echo "Are several people sharing one Harness project for this demo?"
-    echo "If so, give yourself a short participant ID (e.g. your first name: 'alex')."
-    echo "It's appended to everything this kit creates, so nobody collides:"
-    echo "  workshop_k8s_alex, Dev alex, backend alex, alex-k8s-delegate, ..."
-    echo "Leave it empty if you're the only person using the project."
-    echo ""
-    read -r -p "Participant ID (optional): " PARTICIPANT_ID
-    PARTICIPANT_ID=$(normalize_participant_id "$PARTICIPANT_ID")
+    echo "Participant ID - needed when several people share one Harness project."
+    echo "Use the ID your workshop lead gave you (e.g. 'alex'). It's appended to everything"
+    echo "this kit creates (workshop_k8s_alex, Dev alex, alex-k8s-delegate, ...)."
+    echo "Leave it empty only if nobody else uses the project."
+    if [ -n "$previous" ]; then
+      read -r -p "Participant ID [$previous] (type 'none' for no ID): " ans
+      ans=${ans:-$previous}
+    else
+      read -r -p "Participant ID (Enter for none): " ans
+    fi
+    [ "$ans" = "none" ] && ans=""
+    PARTICIPANT_ID=$(normalize_participant_id "$ans")
   fi
   while ! is_valid_participant_id "$PARTICIPANT_ID"; do
     print_error "Participant ID '$PARTICIPANT_ID' is invalid (1-20 lowercase letters/digits, starting with a letter)"
-    read -r -p "Participant ID (optional): " PARTICIPANT_ID
-    PARTICIPANT_ID=$(normalize_participant_id "$PARTICIPANT_ID")
+    read -r -p "Participant ID (Enter for none): " ans
+    PARTICIPANT_ID=$(normalize_participant_id "$ans")
   done
+  if [ -n "$previous" ] && [ "$PARTICIPANT_ID" != "$previous" ]; then
+    print_info "Participant ID changed from '$previous' - Terraform will create a new set of resources for '$PARTICIPANT_ID'"
+  fi
   if [ -n "$PARTICIPANT_ID" ]; then
     print_status "Participant ID: $PARTICIPANT_ID (delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
   else
@@ -483,7 +498,7 @@ if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]
   RECOMMENDED_TOOL="Colima"
 
   # Native vs amd64: --colima-arch flag > COLIMA_ARCH_MODE in .demo-config > prompt
-  COLIMA_MODE=$(choose_colima_mode "${COLIMA_MODE_FLAG:-$(config_get "$CONFIG_FILE" COLIMA_ARCH_MODE)}")
+  COLIMA_MODE=$(choose_colima_mode "$COLIMA_MODE_FLAG" "$(config_get "$CONFIG_FILE" COLIMA_ARCH_MODE)")
   config_set "$CONFIG_FILE" COLIMA_ARCH_MODE "$COLIMA_MODE"
   if [ "$COLIMA_MODE" = "amd64" ]; then
     print_info "Colima mode: amd64 emulation (qemu; slower)"
@@ -943,7 +958,18 @@ else
   PROMETHEUS_PID=$!
 fi
 
-# Build and push Docker images (optional)
+# Build and push Docker images? (--skip-docker-build pre-answers "no")
+if [ "$SKIP_DOCKER_BUILD_FLAG" != true ]; then
+  echo ""
+  echo "Build and push the demo's Docker images (backend, test, docs) to your Docker Hub?"
+  echo "Answer Yes on your first run, after changing code, or after changing your project"
+  echo "name or participant ID (the lab guides are built into the docs image)."
+  read -r -p "Build images? [Y/n]: " BUILD_ANSWER
+  if [[ "$BUILD_ANSWER" =~ ^[Nn] ]]; then
+    SKIP_DOCKER_BUILD=true
+  fi
+fi
+
 if [ "$SKIP_DOCKER_BUILD" = false ]; then
   print_section "Building Backend Docker Image"
 
@@ -1330,7 +1356,7 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
     print_status "Attached secret to service account in default namespace"
   fi
 else
-  print_info "Skipping Docker image build (--skip-docker-build flag used)"
+  print_info "Skipping Docker image build (existing images on Docker Hub will be used)"
 fi
 
 # Configure and run Terraform
@@ -1436,6 +1462,10 @@ if [ "$SKIP_TERRAFORM" = false ]; then
       ensure_valid_harness_pat ".demo-config"
     fi
   fi
+
+  # Harness organization (asked every run; --org pre-answers it)
+  HARNESS_ORG_ID=$(choose_harness_org "$HARNESS_ACCOUNT_ID" "$ORG_FLAG" "$HARNESS_ORG_ID")
+  print_status "Organization: $HARNESS_ORG_ID"
 
   # Get Docker password/PAT
   # Try to get from config file first
@@ -1651,15 +1681,29 @@ except Exception:
     print_info "Skipping pre-flight checks (DEMO_SKIP_PREFLIGHT=true)"
   else
     if ! harness_preflight "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$REUSE_EXISTING_PROJECT"; then
-      print_error "Pre-flight checks failed - fix the problem above and rerun"
-      print_info "(To bypass: DEMO_SKIP_PREFLIGHT=true ./start-demo.sh)"
-      exit 1
+      print_error "Pre-flight checks failed - Terraform will very likely fail with the same problem"
+      read -r -p "Continue anyway? [y/N]: " PREFLIGHT_CONTINUE
+      if [[ ! "$PREFLIGHT_CONTINUE" =~ ^[Yy] ]]; then
+        print_info "Fix the problem above and rerun ./start-demo.sh"
+        exit 1
+      fi
     fi
-    if [ "$REUSE_EXISTING_PROJECT" = true ] && \
-       ! participant_collision_check "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID" kit/terraform.tfstate; then
-      print_info "Choose a unique participant ID: ./start-demo.sh --participant <id>"
-      exit 1
-    fi
+    # Someone else already uses this participant ID (or no ID) in this project: ask for another
+    while [ "$REUSE_EXISTING_PROJECT" = true ] && \
+          ! participant_collision_check "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID" kit/terraform.tfstate; do
+      read -r -p "Enter a different participant ID (ask your workshop lead), or Ctrl-C to stop: " NEW_PID
+      NEW_PID=$(normalize_participant_id "$NEW_PID")
+      if [ -n "$NEW_PID" ] && is_valid_participant_id "$NEW_PID"; then
+        PARTICIPANT_ID="$NEW_PID"
+        config_set "$CONFIG_FILE" PARTICIPANT_ID "$PARTICIPANT_ID"
+        print_status "Participant ID: $PARTICIPANT_ID (delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
+        if [ "$SKIP_DOCKER_BUILD" = false ]; then
+          print_info "The lab guides were already built with the old ID; afterwards rerun ./start-demo.sh and answer Yes to 'Build images?'"
+        fi
+      else
+        print_error "Participant ID must be 1-20 lowercase letters/digits, starting with a letter"
+      fi
+    done
   fi
 
   # Save configuration for future runs (keep settings chosen earlier in this run)

@@ -18,11 +18,11 @@ This builds on [PREEXISTING-PROJECT-SUPPORT.md](PREEXISTING-PROJECT-SUPPORT.md) 
 
 `colima start --vm-type=vz --vz-rosetta --arch x86_64` looks like it uses Apple's hypervisor with Rosetta, but on Apple Silicon an `x86_64` VM can't run on Virtualization.framework: Lima silently switches to **qemu** with software CPU emulation (`~/.colima/_lima/<profile>/lima.yaml` shows `vmType: qemu`, and a `qemu-system-x86_64 -accel tcg` process runs). `colima status` still reports Virtualization.framework. Everything — Kubernetes, the delegate, Docker builds — runs emulated. In testing, the guest kernel panicked during an image build (visible only in Lima's `serial.log`).
 
-Now `start-demo.sh` asks once (default native) and remembers the answer as `COLIMA_ARCH_MODE`:
+Now `start-demo.sh` asks on every run, offering the previous answer (`COLIMA_ARCH_MODE`, default native) so returning users just press Enter:
 
 ```bash
 ./start-demo.sh                      # prompts on Apple Silicon (default: native)
-./start-demo.sh --colima-arch amd64  # opt into emulation
+./start-demo.sh --colima-arch amd64  # pre-answer the question
 ```
 
 Native uses `--vm-type=vz --vz-rosetta --arch aarch64`. amd64-only images (for example a frontend built on Harness Cloud) still run, translated by Rosetta. qemu is only installed/required in amd64 mode.
@@ -45,7 +45,7 @@ After Terraform, the script checks whether the delegate the connectors expect is
 |---|---|
 | `delegateToken` | `GET /ng/api/delegate-token-ng/delegate-token-value?…&delegateTokenName=default_token` (the UI command's token is base64 of this value) |
 | `delegateDockerImage` | `GET /ng/api/delegate-setup/latest-supported-version` → `…/harness/delegate:<version>` |
-| `managerEndpoint` | `GET /ng/api/accounts/{id}` → `cluster`: `prod-2` → `https://app.harness.io/gratis`, `prod-1` → `https://app.harness.io`; anything else falls back with a warning (override with `HARNESS_MANAGER_ENDPOINT`) |
+| `managerEndpoint` | `GET /ng/api/accounts/{id}` → `cluster`: `prod-2` → `https://app.harness.io/gratis`, `prod-1` → `https://app.harness.io`; anything else: the script asks you to paste the value from the Harness UI's install command (`HARNESS_MANAGER_ENDPOINT` pre-answers it) |
 | connected? | `POST /ng/api/delegate-setup/listDelegates` |
 
 The name is `local-k8s-delegate`, or `<participant>-k8s-delegate` (see below) — always the name the connectors select. `--skip-delegate` skips this step. `helm` is now a checked prerequisite. Lab 0 keeps a manual fallback that spells out all three commands and both places the name must be set.
@@ -70,7 +70,7 @@ Before Terraform runs, `harness_preflight` checks:
 - the org exists (otherwise lists the orgs you can see);
 - permissions via `POST /authz/api/acl`: `core_project_create` for a new project, or connector/secret/template/environment/service/monitored-service/code-repo edit rights for an existing one.
 
-Bypass with `DEMO_SKIP_PREFLIGHT=true`.
+If a check fails the script explains the fix and asks *Continue anyway? [y/N]*. (`DEMO_SKIP_PREFLIGHT=true` skips the checks entirely.)
 
 ## 6. Safe cleanup
 
@@ -99,11 +99,16 @@ When the kit reuses a project it didn't create, it records `PROJECT_PREEXISTING=
   - On one run the background `terraform init` failed with no output; an identical rerun succeeded and the cause wasn't found. `start-demo.sh` now retries init once in the foreground.
 - Not verifiable here: delegate `managerEndpoint` for Harness clusters other than prod-1/prod-2; Linux and Windows runs; amd64-emulation mode end to end; current Harness UI menu names referenced by the labs.
 
+## Interactive by default
+
+Less experienced engineers forget switches and hand-edits, so every setting is asked for interactively, with the previous answer (from `.demo-config`) offered as the default: the Harness **organization** (a numbered list of the orgs the token can see — previously this could only be set by editing `.demo-config`), project, **participant ID** (type `none` to clear it), Colima mode, whether to **build images**, Terraform re-run, and delegate install. A participant-ID collision asks for a different ID instead of exiting. Flags and environment variables still exist, but only pre-answer questions.
+
 ## New flags and settings
 
 | Flag / variable | Purpose |
 |---|---|
 | `--colima-arch native\|amd64` | Apple Silicon VM mode (saved as `COLIMA_ARCH_MODE`) |
+| `--org <identifier>` | Harness organization (saved as `HARNESS_ORG_ID`) |
 | `--participant <id>` | Share a project (saved as `PARTICIPANT_ID`) |
 | `--skip-delegate` | Don't install the delegate |
 | `DEMO_SKIP_PREFLIGHT=true` | Skip pre-flight checks |

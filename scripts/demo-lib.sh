@@ -141,7 +141,7 @@ try:
     print(", ".join(o["organization"]["identifier"] for o in json.load(sys.stdin)["data"]["content"]))
 except Exception:
     pass' 2>/dev/null)
-    [ -n "$orgs" ] && print_info "Orgs you can see: $orgs  (set HARNESS_ORG_ID in .demo-config)"
+    [ -n "$orgs" ] && print_info "Orgs you can see: $orgs  (rerun and pick one at the Organization prompt)"
     return 1
   fi
   print_status "Organization '$org' found"
@@ -245,14 +245,17 @@ arch_matches_mode() {
   esac
 }
 
-# Decide native vs amd64. Order: argument (flag) > COLIMA_ARCH_MODE in config > prompt.
-# Prints the chosen mode on stdout; prompts go to stderr.
+# Decide native vs amd64. A --colima-arch flag value skips the prompt; otherwise always
+# ask, offering the previous answer (or native) as the default.
+# Usage: choose_colima_mode FLAG_VALUE REMEMBERED_VALUE   (prints native|amd64; prompts on stderr)
 choose_colima_mode() {
-  local preset="$1"
-  case "$preset" in
+  local flag="$1" remembered="$2"
+  case "$flag" in
     native|arm64|aarch64) echo native; return 0 ;;
     amd64|x86_64)         echo amd64;  return 0 ;;
   esac
+  local def=1
+  [ "$remembered" = "amd64" ] && def=2
   {
     echo ""
     echo "How should Colima run Kubernetes on this Apple Silicon Mac?"
@@ -263,11 +266,62 @@ choose_colima_mode() {
     echo ""
   } >&2
   local choice
-  read -r -p "Choose [1/2] (default: 1): " choice
+  read -r -p "Choose [1/2] (default: $def): " choice
+  choice=${choice:-$def}
   case "$choice" in
     2) echo amd64 ;;
     *) echo native ;;
   esac
+}
+
+# Pick the Harness organization. Lists the orgs the token can see and accepts a number
+# or an identifier; DEFAULT is offered on Enter. A FLAG value skips the prompt.
+# Usage: choose_harness_org ACCOUNT_ID FLAG_VALUE DEFAULT   (prints the org identifier)
+choose_harness_org() {
+  local account="$1" flag="$2" def="${3:-default}"
+  if [ -n "$flag" ]; then
+    echo "$flag"
+    return 0
+  fi
+  local orgs
+  orgs=$(harness_get "/ng/api/organizations?accountIdentifier=${account}&pageSize=100" | python3 -c '
+import sys, json
+try:
+    for o in json.load(sys.stdin)["data"]["content"]:
+        print(o["organization"]["identifier"] + "\t" + o["organization"]["name"])
+except Exception:
+    pass' 2>/dev/null)
+  if [ -n "$orgs" ]; then
+    # If the remembered/default org isn't visible, default to the only org (if just one)
+    if ! printf '%s\n' "$orgs" | cut -f1 | grep -qx "$def"; then
+      [ "$(printf '%s\n' "$orgs" | wc -l | tr -d ' ')" = "1" ] && def=$(printf '%s\n' "$orgs" | cut -f1)
+    fi
+    {
+      echo ""
+      echo "Which Harness organization holds (or should hold) your demo project?"
+      printf '%s\n' "$orgs" | awk -F'\t' '{printf "  %d) %s  (%s)\n", NR, $1, $2}'
+      echo ""
+    } >&2
+  fi
+  local ans chosen
+  while true; do
+    read -r -p "Organization [${def}]: " ans
+    ans=${ans:-$def}
+    chosen="$ans"
+    if [ -n "$orgs" ]; then
+      if printf '%s' "$ans" | grep -Eq '^[0-9]+$'; then
+        chosen=$(printf '%s\n' "$orgs" | sed -n "${ans}p" | cut -f1)
+      fi
+      if [ -n "$chosen" ] && printf '%s\n' "$orgs" | cut -f1 | grep -qx "$chosen"; then
+        echo "$chosen"
+        return 0
+      fi
+      echo "Not one of the organizations listed above - enter its number or identifier." >&2
+    else
+      echo "$chosen"
+      return 0
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -385,7 +439,8 @@ deploy_docs() {
 # ---------------------------------------------------------------------------
 
 # prod-2 accounts use https://app.harness.io/gratis (verified); prod-1 uses the
-# chart default https://app.harness.io. Override with HARNESS_MANAGER_ENDPOINT.
+# chart default https://app.harness.io. Other clusters: the user is asked to paste the value
+# (HARNESS_MANAGER_ENDPOINT pre-answers it).
 harness_manager_endpoint() {
   if [ -n "$HARNESS_MANAGER_ENDPOINT" ]; then
     printf '%s' "$HARNESS_MANAGER_ENDPOINT"
@@ -397,9 +452,15 @@ harness_manager_endpoint() {
     prod-2) printf '%s' "https://app.harness.io/gratis" ;;
     prod-1|"") printf '%s' "https://app.harness.io" ;;
     *)
-      print_info "Harness cluster '$cluster': not sure of its delegate endpoint; using https://app.harness.io" >&2
-      print_info "If the delegate doesn't connect, copy managerEndpoint from the Harness UI's install command into HARNESS_MANAGER_ENDPOINT" >&2
-      printf '%s' "https://app.harness.io"
+      {
+        echo ""
+        echo "Your Harness account is on cluster '$cluster'; this script doesn't know its delegate endpoint."
+        echo "In Harness: Project Settings > Delegates > New Delegate > Kubernetes > Helm Chart,"
+        echo "copy the value after '--set managerEndpoint=' from the install command."
+      } >&2
+      local ep
+      read -r -p "managerEndpoint [https://app.harness.io]: " ep
+      printf '%s' "${ep:-https://app.harness.io}"
       ;;
   esac
 }

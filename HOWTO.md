@@ -68,22 +68,9 @@ cd partner-demo-kit
 ```
 If you were told to use a specific branch: `git checkout <branch>`.
 
-### B6. Pre-configure (only if your org isn't `default`)
+### B6. Nothing to pre-configure
 
-The script asks for most settings, but it does **not** ask for the Harness org — it assumes `default`. If the org identifier you were given is anything else, create the settings file **before** the first run (from inside the repo folder):
-
-```bash
-echo "HARNESS_ORG_ID=<org identifier>" >> .demo-config
-```
-
-`.demo-config` is ignored by git and holds your settings and tokens; never commit or share it. Other values you can pre-set the same way (otherwise you're prompted):
-
-| Key | Example | Meaning |
-|---|---|---|
-| `HARNESS_ACCOUNT_ID` | `AbCdEf123...` | Harness account ID |
-| `HARNESS_ORG_ID` | `my_org` | Org identifier (default `default`) |
-| `PARTICIPANT_ID` | `alex` | Your participant ID (leave out if you're the only user of the project) |
-| `COLIMA_ARCH_MODE` | `native` | Apple Silicon only: `native` (recommended) or `amd64` |
+The script asks for everything it needs (organization, project, participant ID, and so on) and remembers your answers in `.demo-config` for the next run, offering them as defaults — just press Enter to keep them. `.demo-config` is ignored by git and holds your tokens: never commit or share it.
 
 ---
 
@@ -100,8 +87,10 @@ Prompts you'll see, and what to answer:
 |---|---|
 | *How should Colima run Kubernetes…* (Apple Silicon) | **1** — native (fast). Only choose 2 if told to. |
 | *Install missing dependencies?* | **Y** |
+| *Build images?* | **Y** on your first run, after code changes, or after changing your project name or participant ID; otherwise **n** saves time |
 | *Enter your Harness Project name* | The project **display name** exactly (shared project), or a new name for your own project |
-| *Participant ID (optional)* | Your participant ID; **leave empty** only if nobody else uses the project |
+| *Organization* (a numbered list of orgs) | The org your lead gave you — type its number or identifier |
+| *Participant ID* | Your participant ID; **leave empty** only if nobody else uses the project |
 | Docker Hub username / password | Your Docker Hub username and the **token** from B4 |
 | Harness Account ID | From your lead or your Harness URL |
 | Harness PAT | The token from B3 |
@@ -119,7 +108,9 @@ The first run takes a while: the Colima VM and images download, three Docker ima
 | *Organization 'X' not found* | Set the right org (B6); the message lists the orgs you can see |
 | *You lack these permissions in project…* | Ask your lead to make you Project Admin (Part A step 2) |
 | *You can't create projects in org…* | Ask an admin to create the project; enter its exact name |
-| *Connector … already exists … isn't in your local Terraform state* | Someone else is using your participant ID — ask your lead for another, then `./start-demo.sh --participant <id>` |
+| *Connector … already exists … isn't in your local Terraform state* | Someone else is using your participant ID — the script asks for a different one; get a new ID from your lead |
+
+If a check fails, the script asks *Continue anyway? [y/N]* — answer **N**, fix the problem, and run it again.
 
 ---
 
@@ -135,8 +126,9 @@ Then follow the labs in order, starting with Lab 0's verification section.
 
 ## Part E: Re-running and cleaning up
 
-- **Re-run** any time: `./start-demo.sh`. Faster variants: `--skip-docker-build` (reuse images), `--skip-terraform` (Harness resources unchanged), `--skip-delegate`.
-- **Delegate disappeared** (e.g. after restarting your cluster): `./start-demo.sh --skip-docker-build --skip-terraform` reinstalls it.
+- **Re-run** any time: `./start-demo.sh`. Your previous answers are offered as defaults; answer **n** to *Build images?* and **1** (skip) to the Terraform question to make it quick.
+- **Delegate disappeared** (e.g. after restarting your cluster): just re-run `./start-demo.sh` — it notices and offers to reinstall it.
+- Experienced users can pre-answer questions with flags (`--skip-docker-build`, `--skip-terraform`, `--skip-delegate`, `--org <id>`, `--participant <id>`, `--colima-arch native|amd64`); nobody *needs* them.
 - **Stop for the day**: `./stop-demo.sh` → option 1. Your Harness resources stay.
 - **Remove your Harness resources**: `./stop-demo.sh --delete-harness-project`. In a shared or admin-created project this removes **only your** resources — the project itself and other people's resources are never deleted.
 

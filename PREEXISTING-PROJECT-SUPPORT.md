@@ -67,17 +67,9 @@ It skips the import when the project is already in state, writes the output to `
 
 1. Ask an org admin to create the project and give you the **Project Admin** role on it.
 2. Generate your PAT **in the same account** as the project. The account ID is the second field of the token: `pat.<accountId>.<keyId>.<secret>`.
-3. If your org isn't `default`, add it to `.demo-config`:
-   ```
-   HARNESS_ORG_ID=<your_org_identifier>
-   ```
-4. Run:
-   ```bash
-   ./start-demo.sh --skip-docker-build
-   ```
-   When asked for the project name, enter the project's **display name** exactly as the admin created it.
+3. Run `./start-demo.sh`. At the **Organization** prompt pick the project's org from the list (number or identifier); when asked for the project name, enter the project's **display name** exactly as the admin created it.
 
-`--skip-docker-build` is only needed if your images already exist. It also skips an early name prompt in the Docker section, which runs before the PAT is collected and can't look up existing projects (see below).
+> Update: the script now asks for the org interactively (it used to require adding `HARNESS_ORG_ID` to `.demo-config` by hand). See [HOWTO.md](HOWTO.md) for the full step-by-step.
 
 ## Diagnosing a 403 quickly
 
