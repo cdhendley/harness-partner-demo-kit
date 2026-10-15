@@ -86,10 +86,18 @@ When the kit reuses a project it didn't create, it records `PROJECT_PREEXISTING=
 
 ## Verification
 
-- `scripts/demo-lib.sh`: 53 unit/integration tests (bash 3.2), shellcheck clean.
-- Terraform: `validate`; empty participant ID → no changes on an existing state; participant `zz` → all 14 resources suffixed; invalid IDs rejected.
-- End to end on Apple Silicon (native Colima): rerun on an existing single-user setup (pre-flight passes, `0 added, 0 changed, 0 destroyed`, docs deployed, delegate detected); a second participant in the same project (see the PR description for results).
-- Not verifiable here: delegate `managerEndpoint` for Harness clusters other than prod-1/prod-2; Linux/Windows runs; current Harness UI menu names referenced by the labs.
+- `scripts/demo-lib.sh`: 53 unit/integration tests (bash 3.2), shellcheck clean; no new shellcheck warnings in `start-demo.sh`/`stop-demo.sh`.
+- Terraform: `validate`; empty participant ID → **no changes** on an existing single-user state; participant `zz` → all 14 resources suffixed; invalid IDs rejected.
+- Multi-arch builds of the backend and test images succeed for `linux/amd64` and `linux/arm64`.
+- End to end on an Apple Silicon Mac with native Colima, against one shared Harness project:
+  1. **Existing single-user setup rerun** — pre-flight passes, `terraform apply` 0 added / 0 changed / 0 destroyed, docs deployed, delegate detected as connected.
+  2. **Second participant (`zz`) in its own clone** — project imported (not created), 14 `_zz` resources created, `zz-k8s-delegate` installed and connected next to the first participant's delegate, all five connector tests (both participants) succeed, first participant's plan still shows no changes.
+  3. **`stop-demo.sh --delete-harness-project` for `zz`** — destroy plan 13 resources (project excluded); the shared project and the other participant's resources remain.
+  4. **Fresh delegate install** — after the cluster was cleaned, a rerun installed `local-k8s-delegate` from scratch via the API-derived values and it connected.
+- Two transient failures seen and handled:
+  - Harness briefly reported `workshopdocker_<id>` as "referenced by other entities" right after the template/service using it were destroyed; a second `destroy` succeeded. `stop-demo.sh` now retries once after 15 seconds (the old fallback — deleting the whole project — is unsafe for shared projects).
+  - On one run the background `terraform init` failed with no output; an identical rerun succeeded and the cause wasn't found. `start-demo.sh` now retries init once in the foreground.
+- Not verifiable here: delegate `managerEndpoint` for Harness clusters other than prod-1/prod-2; Linux and Windows runs; amd64-emulation mode end to end; current Harness UI menu names referenced by the labs.
 
 ## New flags and settings
 
