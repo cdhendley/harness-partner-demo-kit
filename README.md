@@ -74,19 +74,25 @@ The demo kit consists of:
 - **Git**: Version control
 - **Docker**: Container runtime ([Docker Desktop](https://www.docker.com/products/docker-desktop) or Docker Engine)
 - **Kubernetes** (platform-specific):
-  - **macOS (Apple Silicon M1/M2/M3/M4)**: [Colima](https://github.com/abiosoft/colima) (**REQUIRED** for AMD64 emulation via Rosetta 2)
+  - **macOS (Apple Silicon M1/M2/M3/M4)**: [Colima](https://github.com/abiosoft/colima) (**REQUIRED**), running a **native arm64 VM by default**
     ```bash
-    brew install colima docker kubectl qemu lima-additional-guestagents
-    colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker
+    brew install colima docker kubectl
+    colima start --vm-type=vz --vz-rosetta --arch aarch64 --cpu 4 --memory 8 --kubernetes --runtime docker
     ```
-    Note: First startup takes 5-10 minutes. Harness Cloud builds AMD64 images, so AMD64 emulation is required. The `start-demo.sh` script will detect missing dependencies and offer to install them automatically.
+    Note: The native VM uses Apple's Virtualization.framework and is fast; amd64-only container images still run inside it via Rosetta. An amd64-emulated VM is available with `./start-demo.sh --colima-arch amd64` (also needs `brew install qemu lima-additional-guestagents`), but on Apple Silicon `--arch x86_64` runs a qemu software-emulated VM that is very slow and can be unstable — native is recommended. The `start-demo.sh` script will detect missing dependencies and offer to install them automatically.
   - **macOS (Intel)**: Choose one - [minikube](https://minikube.sigs.k8s.io/docs/start/), [Colima](https://github.com/abiosoft/colima), [Docker Desktop](https://www.docker.com/products/docker-desktop), or [Rancher Desktop](https://rancherdesktop.io/)
   - **Windows**: [minikube](https://minikube.sigs.k8s.io/docs/start/) (recommended), [Docker Desktop](https://www.docker.com/products/docker-desktop), or [Rancher Desktop](https://rancherdesktop.io/)
   - **Linux**: [minikube](https://minikube.sigs.k8s.io/docs/start/) or your preferred K8s distribution
 - **Minimum Cluster Resources**: 4 CPU cores and 8GB memory
   - The `start-demo.sh` script validates cluster resources and provides remediation guidance if insufficient
 - **kubectl**: Kubernetes CLI (usually included with above tools)
-- **Helm**: Kubernetes package manager
+- **Helm**: Kubernetes package manager (**required** — `start-demo.sh` uses it to install the Harness delegate)
+- **Docker buildx plugin**: Used to build multi-architecture images. Docker Desktop includes it; Homebrew's `docker` CLI does not:
+  ```bash
+  brew install docker-buildx
+  mkdir -p ~/.docker/cli-plugins && ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" ~/.docker/cli-plugins/docker-buildx
+  ```
+  `start-demo.sh` offers to do this for you. Without buildx, `docker build` falls back to the deprecated legacy builder (single architecture only).
 - **Terraform**: Infrastructure as Code tool (v1.0+)
 - **Node.js & npm**: For frontend application (Node 20+)
 - **Python**: For backend application (Python 3.8+)
@@ -114,7 +120,7 @@ The demo kit consists of:
 
 | OS | Version | Architecture | Kubernetes Option | Notes |
 |----|---------|--------------|-------------------|-------|
-| **macOS** | 12.0+ (Monterey) | Apple Silicon (M1/M2/M3/M4) | Colima (**required**) | Uses Rosetta 2 for AMD64 emulation |
+| **macOS** | 12.0+ (Monterey) | Apple Silicon (M1/M2/M3/M4) | Colima (**required**) | Native arm64 VM by default; amd64 images run via Rosetta |
 | **macOS** | 12.0+ (Monterey) | Intel | Colima, minikube, Docker Desktop, Rancher Desktop | Any K8s option works |
 | **Linux** | Ubuntu 20.04+, Debian 11+, Fedora 36+ | x86_64 | minikube, Docker Desktop, Rancher Desktop | Native AMD64, no emulation needed |
 | **Windows** | 10 (Build 19041+), 11 | x86_64 | minikube, Docker Desktop, Rancher Desktop | Requires WSL2 or Git Bash for scripts |
@@ -130,9 +136,12 @@ The demo kit consists of:
 #### Platform-Specific Notes
 
 **🍎 Apple Silicon (M1/M2/M3/M4):**
-- Colima with Rosetta 2 is **required** for AMD64 emulation (Harness Cloud builds AMD64 images)
-- Docker Desktop also works but Colima is recommended for better resource efficiency
-- First Colima startup takes 5-10 minutes to download AMD64 base images
+- Colima is **required**; `start-demo.sh` asks which VM architecture to use (default: **native arm64**) and remembers the choice (`COLIMA_ARCH_MODE` in `.demo-config`)
+- Native mode: `colima start --vm-type=vz --vz-rosetta --arch aarch64 ...` — fast, and amd64-only images still run via Rosetta
+- amd64 mode (`--colima-arch amd64`): a qemu software-emulated x86 VM — very slow and can be unstable; needs `qemu` and `lima-additional-guestagents`
+- The script checks the Docker daemon's real architecture (`docker info --format '{{.Architecture}}'`), not Colima's config
+- **Switching architectures requires deleting Colima's data disk**: `colima delete --data` (plain `colima delete` keeps it, and the old cluster's data breaks Kubernetes on the new VM)
+- Images are built for both linux/amd64 and linux/arm64, so the same tags work on Harness Cloud and on Apple Silicon clusters
 
 **🐧 Linux:**
 - Any modern distribution with Docker support works
@@ -232,17 +241,18 @@ This allows you to follow the lab instructions while working in the Harness plat
 The `start-demo.sh` script automates the **complete demo setup** from local infrastructure to Harness resources:
 
 **1. Prerequisites Check**
-- Verifies Docker, kubectl, Terraform, and other required tools are installed
+- Verifies Docker, kubectl, helm, Terraform, and other required tools are installed
+- Checks for the Docker buildx plugin (offers to install/link it)
 - Checks that Docker daemon is running
 
 **2. Platform & Kubernetes Detection**
 - Detects your operating system and architecture (macOS/Windows/Linux, ARM64/AMD64)
 - Validates Kubernetes tool based on platform:
-  - Apple Silicon Macs: Requires Colima with AMD64 emulation
+  - Apple Silicon Macs: Requires Colima; prompts for native arm64 (default) or amd64 emulation
   - Windows: Recommends minikube (allows Docker Desktop/Rancher Desktop)
   - Other platforms: Flexible (minikube, Colima, Docker Desktop, Rancher Desktop)
 - Automatically starts Colima/minikube if needed
-- Verifies cluster architecture (ensures AMD64 for Apple Silicon)
+- Verifies the Docker daemon's actual architecture matches the chosen Colima mode
 - **Validates cluster resources** (minimum 4 CPU cores, 8GB memory) with remediation guidance
 
 **3. Prometheus Deployment** (Background)
@@ -261,6 +271,7 @@ The `start-demo.sh` script automates the **complete demo setup** from local infr
 
 **5. Docker Image Builds** (Parallel!)
 - **Builds all three images simultaneously** (backend, test, docs) in parallel
+- Uses docker buildx (BuildKit) to build **linux/amd64 and linux/arm64** under the same tag, so images work on Harness Cloud (amd64) and Apple Silicon clusters
 - Progress tracking shows status of each build in real-time
 - Pushes to your Docker Hub repository
 - Provides clear error messages if build or push fails
@@ -272,11 +283,21 @@ The `start-demo.sh` script automates the **complete demo setup** from local infr
   - Harness Personal Access Token (PAT)
   - Docker Hub password/PAT (if not already logged in)
 - **Automatic configuration**: Updates `kit/se-parms.tfvars` with your values
+- **Pre-flight checks** before Terraform: token shape (`pat.<account>.<id>.<secret>` — an API key alone is not a token), token account matches your Account ID, org exists, permissions (project-create for a new project; project-scoped edit permissions for an existing one), and participant-ID collisions. Bypass with `DEMO_SKIP_PREFLIGHT=true`
 - **IaC execution**: Runs Terraform init, plan, and apply automatically
 - **Idempotent**: Skips if state file already exists
-- **Creates all Harness resources**: Project, connectors, environments, services, monitored services, code repository, etc.
+- **Creates all Harness resources**: Project (or imports an existing one), connectors, environments, services, monitored services, code repository, etc.
 
-**7. Status Display**
+**7. Harness Delegate Installation** (Automated!)
+- Fetches the project's delegate token (`default_token`), the manager endpoint, and the latest delegate image from the Harness API
+- Installs the delegate with Helm at **project scope** into the `harness-delegate-ng` namespace, named to match the connectors: `local-k8s-delegate`, or `<participant>-k8s-delegate` when a participant ID is set
+- Waits until Harness shows it connected. Skip with `--skip-delegate`; the manual fallback is in Lab 0
+
+**8. Lab Documentation**
+- Deploys the docs site on every run (also with `--skip-docker-build`, using the existing docs image) at http://localhost:30001
+- Uses `imagePullPolicy: Always` plus a rollout restart so a rebuilt `docs-latest` is picked up
+
+**9. Status Display**
 - Shows cluster status, Prometheus deployment, and Terraform results
 - Provides clear next steps based on what was configured
 
@@ -289,9 +310,31 @@ The `start-demo.sh` script automates the **complete demo setup** from local infr
 # Skip Terraform/Harness setup (useful for infrastructure-only testing)
 ./start-demo.sh --skip-terraform
 
+# Skip the automatic Harness delegate install
+./start-demo.sh --skip-delegate
+
+# Set a participant ID (for sharing one Harness project - see below)
+./start-demo.sh --participant alice
+
+# Apple Silicon: choose the Colima VM architecture (default: native)
+./start-demo.sh --colima-arch native
+./start-demo.sh --colima-arch amd64
+
 # Combine options
 ./start-demo.sh --skip-docker-build --skip-terraform
 ```
+
+Shared helper functions live in [scripts/demo-lib.sh](scripts/demo-lib.sh) (bash 3.2 compatible, so it runs with the macOS system bash).
+
+### Sharing One Harness Project
+
+Several people can work in **one** Harness project without colliding:
+- Each person picks a **participant ID**: 1-20 lowercase letters/digits, starting with a letter (prompted, or `--participant <id>`; saved as `PARTICIPANT_ID` in `.demo-config`)
+- Terraform appends `_<id>` to identifiers and ` <id>` to names of everything the kit creates — e.g. repository `partner_demo_kit_<id>`, connectors `workshop_k8s_<id>` / `workshopdocker_<id>` / `prometheus_<id>`, environments, infrastructure, backend service, template, and monitored services
+- Your delegate becomes `<id>-k8s-delegate`, and the lab guides at http://localhost:30001 are personalized with your names
+- Leave the ID empty to use the original single-user names
+- To reuse an existing project, enter its **exact display name** when prompted; it is imported into Terraform, never recreated
+- `stop-demo.sh` never deletes a shared or pre-existing project — it only destroys your own resources
 
 ### First Run vs Subsequent Runs
 
@@ -356,14 +399,15 @@ When you run `./stop-demo.sh` without arguments, you'll see a user-friendly menu
    - Preserves Harness resources for next time
 
 4. **Full cleanup (delete all Harness resources)**
-   - Deletes your Harness demo project
+   - Deletes your Harness demo project — **unless** it was pre-existing or shared (`PROJECT_PREEXISTING=true` or a `PARTICIPANT_ID` set); then the project is removed from Terraform state before `destroy`, so only your own resources are destroyed
+   - Uses your configured org (`HARNESS_ORG_ID`)
    - Deletes Docker Hub repository
    - Removes Prometheus
    - Keeps cluster running and config files
 
 5. **Complete cleanup (everything including cluster)**
    - Same as option 4, but also stops the cluster
-   - Option to delete Colima VM for fresh start (Apple Silicon)
+   - Option to delete Colima VM and its data disk for a fresh start (`colima delete -f --data`)
 
 6. **Custom cleanup options**
    - Choose exactly what to cleanup
@@ -455,42 +499,29 @@ ngrok http 9090
 
 ### Step 4: Build and Push Docker Images
 
-> **✅ Automated**: The [start-demo.sh](start-demo.sh) script automatically detects your architecture (Intel/AMD vs Apple Silicon) and builds all images with the correct platform settings. You can skip this step if using the automated script.
+> **✅ Automated**: The [start-demo.sh](start-demo.sh) script builds all images with docker buildx for **linux/amd64 and linux/arm64** under the same tag and pushes them. You can skip this step if using the automated script.
 
-> **⚠️ Manual Builds**: If building manually, Harness Cloud runs on amd64 architecture. Apple Silicon users (M1/M2/M3/M4) must use `docker buildx build --platform linux/amd64`.
+> **ℹ️ Manual Builds**: Build multi-arch images so the same tags work on Harness Cloud (amd64) and on Apple Silicon clusters. This requires the buildx plugin (see Prerequisites). An amd64-only image still runs on a native arm64 Colima VM via Rosetta, but multi-arch is preferred.
+
+```bash
+# Log in and create a multi-arch builder (once)
+docker login -u dockerhubaccountid
+docker buildx create --name harness-demo-builder --driver docker-container
+```
 
 #### Backend Application Image
 
 ```bash
-# Navigate to backend directory
-cd backend
-
-# Build the Docker image
-# Replace "dockerhubaccountid" with YOUR Docker Hub username
-
-# For Intel/AMD Macs and PCs:
-docker build -t dockerhubaccountid/harness-demo:backend-latest .
-
-# For Apple Silicon Macs (M1/M2/M3/M4):
-docker buildx build --platform linux/amd64 -t dockerhubaccountid/harness-demo:backend-latest --push .
-
-# If not using buildx --push flag, login and push separately:
-docker login -u dockerhubaccountid
-docker push dockerhubaccountid/harness-demo:backend-latest
+# Replace "dockerhubaccountid" with YOUR Docker Hub username (run from the repo root)
+docker buildx build --builder harness-demo-builder --platform linux/amd64,linux/arm64 \
+  -t dockerhubaccountid/harness-demo:backend-latest --push backend
 ```
 
 #### Test Image (for CI Pipeline)
 
 ```bash
-# Navigate to python-tests directory
-cd python-tests
-
-# For Intel/AMD Macs and PCs:
-docker build -t dockerhubaccountid/harness-demo:test-latest .
-docker push dockerhubaccountid/harness-demo:test-latest
-
-# For Apple Silicon Macs (M1/M2/M3/M4):
-docker buildx build --platform linux/amd64 -t dockerhubaccountid/harness-demo:test-latest --push .
+docker buildx build --builder harness-demo-builder --platform linux/amd64,linux/arm64 \
+  -t dockerhubaccountid/harness-demo:test-latest --push python-tests
 ```
 
 **Important Docker Image Tags:**
@@ -511,19 +542,9 @@ docker buildx build --platform linux/amd64 -t dockerhubaccountid/harness-demo:te
    - Navigate to Account Settings > Subscriptions
    - Enable: **CI**, **CD**, and **Code Repository**
 
-3. **Install Harness Delegate**:
-   - Go to Account Settings > Delegates
-   - Click "New Delegate"
-   - Select "Kubernetes" and follow the Helm installation instructions
-   - Example:
-     ```bash
-     helm repo add harness-delegate https://app.harness.io/storage/harness-download/delegate-helm-chart/
-     helm upgrade -i helm-delegate harness-delegate/harness-delegate-ng \
-       --namespace harness-delegate-ng --create-namespace \
-       --set delegateName=helm-delegate \
-       --set accountId=YOUR_ACCOUNT_ID \
-       --set delegateToken=YOUR_DELEGATE_TOKEN
-     ```
+3. **Harness Delegate**:
+   - `start-demo.sh` **installs the delegate automatically** with Helm at **project scope**, named `local-k8s-delegate` (or `<participant>-k8s-delegate`), and waits for it to connect
+   - Manual fallback (only if the script couldn't, or you used `--skip-delegate`): see **Lab 0** ([markdown/0-login.md](markdown/0-login.md)) — in **Project Settings > Delegates > New Delegate > Kubernetes > Helm Chart**, run all three commands, and set both the Helm release name and `--set delegateName=` to your delegate name so the connectors find it
 
 4. **Get Your Harness Account ID**:
    - Click on your profile (top right)
@@ -578,8 +599,8 @@ terraform plan -var="pat=$DEMO_BASE_PAT" -var-file="se-parms.tfvars" -out=plan.t
 terraform apply -auto-approve plan.tfplan
 ```
 
-**What Gets Created** (all in your demo project):
-- Harness project (your custom name, default: "Base Demo")
+**What Gets Created** (all in your demo project; with a participant ID, identifiers get `_<id>` and names get ` <id>`):
+- Harness project (your custom name, default: "Base Demo"; an existing project is imported, not recreated)
 - Kubernetes connector (workshop_k8s)
 - Docker Hub connector (workshopdocker)
 - Prometheus connector
@@ -625,6 +646,8 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 ├── CLAUDE.md              # Instructions for Claude Code AI assistant
 ├── start-demo.sh          # Automated startup script for local infrastructure
 ├── stop-demo.sh           # Automated shutdown script for cleanup
+├── scripts/
+│   └── demo-lib.sh        # Shared helpers (participant IDs, pre-flight, Colima, buildx, delegate)
 ├── kit/                   # Terraform Infrastructure as Code
 │   ├── main.tf            # Main IaC configuration
 │   ├── se-parms.tfvars    # Your configuration variables
@@ -682,12 +705,25 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 - **Solution** (Rancher Desktop): Check that Kubernetes is enabled in preferences
 
 **Issue**: Colima fails to start (Apple Silicon)
-- **Cause**: Missing dependencies (qemu, lima-additional-guestagents)
-- **Solution**: Install all required dependencies and start fresh:
+- **Cause**: Missing dependencies — native mode needs `colima docker kubectl`; amd64 mode also needs `qemu` and `lima-additional-guestagents`
+- **Solution**: Install the dependencies and start fresh (native, recommended):
   ```bash
-  brew install colima docker kubectl qemu lima-additional-guestagents
+  brew install colima docker kubectl
   colima delete --data -f
-  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker
+  colima start --vm-type=vz --vz-rosetta --arch aarch64 --cpu 4 --memory 8 --kubernetes --runtime docker
+  ```
+- Verify: `kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}'` should print `arm64`
+
+**Issue**: Colima/Kubernetes is very slow or unstable (Apple Silicon)
+- **Cause**: The VM was started with `--arch x86_64` (or `--colima-arch amd64`). On Apple Silicon that is a qemu software-emulated x86 VM, not Rosetta — it is very slow and can be unstable
+- **Solution**: Switch to the native VM (`./start-demo.sh --colima-arch native`). amd64-only images still run inside it via Rosetta
+
+**Issue**: Kubernetes broken after switching Colima architecture (native ↔ amd64)
+- **Cause**: Plain `colima delete` keeps Colima's data disk; the old cluster's data breaks Kubernetes on the new VM
+- **Solution**: Delete the data disk too, then start again:
+  ```bash
+  colima delete -f --data
+  ./start-demo.sh
   ```
 
 **Issue**: Colima fails during Kubernetes provisioning (k3s download error)
@@ -699,17 +735,17 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
   1. **Retry with a clean reset** (fixes most cases):
      ```bash
      colima delete --data -f
-     colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker
+     colima start --vm-type=vz --vz-rosetta --arch aarch64 --cpu 4 --memory 8 --kubernetes --runtime docker
      ```
   2. **Clear Colima cache** if retry alone fails:
      ```bash
      rm -rf ~/Library/Caches/colima/caches/*
      colima delete --data -f
-     colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker
+     colima start --vm-type=vz --vz-rosetta --arch aarch64 --cpu 4 --memory 8 --kubernetes --runtime docker
      ```
   3. **Pin a k3s version** if the default keeps failing:
      ```bash
-     colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker --kubernetes-version="v1.34.1+k3s1"
+     colima start --vm-type=vz --vz-rosetta --arch aarch64 --cpu 4 --memory 8 --kubernetes --runtime docker --kubernetes-version="v1.34.1+k3s1"
      ```
   4. **Check network/DNS** — disable VPN, try a different network, or switch DNS to a public resolver (e.g. `1.1.1.1` / `8.8.8.8`)
 
@@ -729,22 +765,18 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 **Issue**: Test Intelligence step fails with "pytest: not found"
 - **Cause**: The Test Intelligence step is not using the correct container image
 - **Solution**:
-  1. Build and push the test image (see architecture notes above for Apple Silicon):
+  1. Build and push the multi-arch test image (see Step 4):
      ```bash
-     cd python-tests
-     # Apple Silicon: docker buildx build --platform linux/amd64 -t YOUR-USERNAME/harness-demo:test-latest --push .
-     # Intel/AMD: docker build -t YOUR-USERNAME/harness-demo:test-latest . && docker push YOUR-USERNAME/harness-demo:test-latest
+     docker buildx build --builder harness-demo-builder --platform linux/amd64,linux/arm64 -t YOUR-USERNAME/harness-demo:test-latest --push python-tests
      ```
   2. In Harness pipeline, update Test Intelligence step to use image: `YOUR-USERNAME/harness-demo:test-latest`
   3. Do NOT use `backend-latest` for testing - use `test-latest`
 
 **Issue**: Test Intelligence fails with "exec /usr/bin/sh: exec format error"
-- **Cause**: Docker image was built for wrong architecture (ARM64 instead of amd64)
-- **Affects**: Apple Silicon Macs building images for Harness Cloud
-- **Solution**: Rebuild the image with `--platform linux/amd64`:
+- **Cause**: Docker image was built for a single architecture (e.g. arm64 only) that doesn't match Harness Cloud (amd64) — typically a legacy-builder `docker build` on Apple Silicon without buildx
+- **Solution**: Install the buildx plugin (see Prerequisites) and rebuild multi-arch:
   ```bash
-  cd python-tests
-  docker buildx build --platform linux/amd64 -t YOUR-USERNAME/harness-demo:test-latest --push .
+  docker buildx build --builder harness-demo-builder --platform linux/amd64,linux/arm64 -t YOUR-USERNAME/harness-demo:test-latest --push python-tests
   ```
 
 **Issue**: Pipeline setup or build infrastructure questions
@@ -757,6 +789,7 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 
 **Issue**: Harness delegate not connecting
 - **Solution**: Check delegate pod status: `kubectl get pods -n harness-delegate-ng`
+- The connectors expect the delegate name `local-k8s-delegate` (or `<participant>-k8s-delegate`); re-run `./start-demo.sh --skip-docker-build --skip-terraform` to reinstall it, or follow the manual steps in Lab 0
 
 ### Verifying Your Setup
 
@@ -787,7 +820,7 @@ To start fresh and reset everything, you have several options:
 ```
 
 This single command will:
-- Delete your Harness demo project via API (with confirmation prompt)
+- Delete your Harness demo project via API (with confirmation prompt) — a pre-existing or shared project is never deleted; only your own resources are destroyed
 - Delete the Docker Hub `harness-demo` repository via API (with confirmation prompt)
 - Delete configuration files (.demo-config, se-parms.tfvars, state files)
 - Remove Kubernetes deployments (frontend/backend)

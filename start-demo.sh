@@ -157,9 +157,9 @@ ensure_participant_id() {
   else
     echo ""
     echo "Are several people sharing one Harness project for this demo?"
-    echo "If so, give yourself a short participant ID (e.g. your first name: 'casey')."
+    echo "If so, give yourself a short participant ID (e.g. your first name: 'alex')."
     echo "It's appended to everything this kit creates, so nobody collides:"
-    echo "  workshop_k8s_casey, Dev casey, backend casey, casey-k8s-delegate, ..."
+    echo "  workshop_k8s_alex, Dev alex, backend alex, alex-k8s-delegate, ..."
     echo "Leave it empty if you're the only person using the project."
     echo ""
     read -r -p "Participant ID (optional): " PARTICIPANT_ID

@@ -83,7 +83,7 @@ is_valid_participant_id() {
   printf '%s' "$1" | grep -Eq '^[a-z][a-z0-9]{0,19}$'
 }
 
-# Turn free text ("Casey H.") into a candidate ID ("caseyh")
+# Turn free text ("Alex P.") into a candidate ID ("alexp")
 normalize_participant_id() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | sed 's/^[0-9]*//' | cut -c1-20
 }

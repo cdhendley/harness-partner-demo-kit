@@ -27,12 +27,12 @@ variable "project_identifier" {
 }
 
 variable "participant_id" {
-  description = "Short per-person ID when several people share one project (e.g. 'casey'). Appended to every resource this kit creates so participants don't collide. Empty = single-user names."
+  description = "Short per-person ID when several people share one project (e.g. 'alex'). Appended to every resource this kit creates so participants don't collide. Empty = single-user names."
   default     = ""
 
   validation {
     condition     = can(regex("^([a-z][a-z0-9]{0,19})?$", var.participant_id))
-    error_message = "participant_id must be empty or 1-20 lowercase letters/digits starting with a letter (e.g. 'casey')."
+    error_message = "participant_id must be empty or 1-20 lowercase letters/digits starting with a letter (e.g. 'alex')."
   }
 }
 
@@ -42,7 +42,7 @@ variable "delegate_name" {
 }
 
 locals {
-  # Identifier suffix ("_casey") and display-name suffix (" casey"); both empty in single-user mode
+  # Identifier suffix ("_alex") and display-name suffix (" alex"); both empty in single-user mode
   id_sfx        = var.participant_id == "" ? "" : "_${var.participant_id}"
   name_sfx      = var.participant_id == "" ? "" : " ${var.participant_id}"
   delegate_name = var.delegate_name != "" ? var.delegate_name : (var.participant_id == "" ? "local-k8s-delegate" : "${var.participant_id}-k8s-delegate")
