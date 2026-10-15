@@ -108,7 +108,6 @@ Prompts you'll see, and what to answer:
 
 | Prompt | Answer |
 |---|---|
-| *How should Colima run Kubernetes…* (Apple Silicon) | **1** — native (fast). Only choose 2 if told to. |
 | *Install missing dependencies?* | **Y** |
 | *Build images?* | **Y** on your first run, after code changes, or after changing your project name or participant ID; otherwise **n** saves time |
 | *Enter your Harness Project name* | The project **display name** exactly (shared project), or a new name for your own project |
@@ -198,7 +197,7 @@ Use a Docker Hub **access token** (B4), not your password, and check the usernam
 
 ### Everything is extremely slow, or *"connection to the server … was refused"* (Apple Silicon)
 
-Your Colima VM is probably running in **amd64 emulation** (software-emulated x86 — very slow, and it has crashed mid-build). Re-run and choose **1) Native arm64** at the Colima question. Switching rebuilds the Colima VM and its Kubernetes cluster from scratch (your Harness resources are untouched; the script redeploys the local pieces). The first rebuild takes a few minutes.
+Your Colima VM is probably running in **amd64 emulation** (software-emulated x86 — very slow, and it has crashed mid-build). Re-run `./start-demo.sh`; it switches to native arm64 automatically. Switching rebuilds the Colima VM and its Kubernetes cluster from scratch (your Harness resources are untouched; the script redeploys the local pieces). The first rebuild takes a few minutes.
 
 ### http://localhost:30001 doesn't load
 

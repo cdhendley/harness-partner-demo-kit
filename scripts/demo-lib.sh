@@ -202,11 +202,10 @@ participant_collision_check() {
   local code
   code=$(harness_get_code "/ng/api/connectors/${conn}?accountIdentifier=${account}&orgIdentifier=${org}&projectIdentifier=${project}")
   if [ "$code" = "200" ]; then
-    print_error "Connector '$conn' already exists in project '$project' but isn't in your local Terraform state"
     if [ -n "$pid" ]; then
-      print_info "Someone may already be using participant ID '$pid' — pick a different one"
+      print_error "The name/ID '$pid' is already taken in project '$project' (connector '$conn' exists and isn't yours) - pick a different one"
     else
-      print_info "Someone already set this project up without a participant ID — choose a participant ID"
+      print_error "Someone already uses this project without a name/ID (connector '$conn' exists and isn't yours) - type a name/ID for yourself"
     fi
     return 1
   fi
@@ -254,24 +253,9 @@ choose_colima_mode() {
     native|arm64|aarch64) echo native; return 0 ;;
     amd64|x86_64)         echo amd64;  return 0 ;;
   esac
-  local def=1
-  [ "$remembered" = "amd64" ] && def=2
-  {
-    echo ""
-    echo "How should Colima run Kubernetes on this Apple Silicon Mac?"
-    echo "  1) Native arm64 (recommended) - Apple's hypervisor, fast and light."
-    echo "     amd64-only images still run, translated by Rosetta."
-    echo "  2) amd64 emulation - full x86 CPU emulation (qemu). Much slower and"
-    echo "     heavier; only if you specifically need an amd64 cluster."
-    echo ""
-  } >&2
-  local choice
-  read -r -p "Choose [1/2] (default: $def): " choice
-  choice=${choice:-$def}
-  case "$choice" in
-    2) echo amd64 ;;
-    *) echo native ;;
-  esac
+  # No question: Apple Silicon always runs native arm64 unless --colima-arch amd64 is given
+  : "$remembered"
+  echo native
 }
 
 # Pick the Harness organization. Lists the orgs the token can see and accepts a number
@@ -321,6 +305,132 @@ except Exception:
       echo "$chosen"
       return 0
     fi
+  done
+}
+
+# Pick the Harness project. Only projects in ORG where this user has the permissions the kit
+# needs (connectors, secrets, environments, services, templates, monitored services, code repo)
+# are offered. "Create a new project" is offered only to users allowed to create projects.
+# DEFAULT_ID (the previous answer) is offered on Enter.
+# Prints: "<identifier>\t<display name>\t<existing|new>"  (prompts go to stderr)
+# Returns 1 if the user can't use any project and can't create one.
+# Usage: choose_harness_project ACCOUNT_ID ORG_ID DEFAULT_ID
+choose_harness_project() {
+  local account="$1" org="$2" def="$3"
+  local me
+  me=$(harness_get "/ng/api/user/currentUser?accountIdentifier=${account}" | json_get "data.uuid")
+  local listing
+  listing=$(harness_get "/ng/api/projects?accountIdentifier=${account}&orgIdentifier=${org}&pageSize=100" | python3 -c '
+import sys, json
+try:
+    for p in json.load(sys.stdin)["data"]["content"]:
+        print(p["project"]["identifier"] + "\t" + p["project"]["name"])
+except Exception:
+    pass' 2>/dev/null)
+
+  # One ACL request: per-project edit permissions + project-create in the org
+  local eligible can_create
+  eligible=$(printf '%s\n' "$listing" | ACCOUNT="$account" ORG="$org" ME="$me" PAT="$HARNESS_PAT" BASE="$HARNESS_API_BASE" python3 -c '
+import sys, os, json, urllib.request
+acct, org, me = os.environ["ACCOUNT"], os.environ["ORG"], os.environ["ME"]
+projects = [l.rstrip("\n").split("\t", 1) for l in sys.stdin if "\t" in l]
+needed = [("CONNECTOR","core_connector_edit"), ("SECRET","core_secret_edit"),
+          ("ENVIRONMENT","core_environment_edit"), ("SERVICE","core_service_edit"),
+          ("TEMPLATE","core_template_edit"), ("MONITOREDSERVICE","chi_monitoredservice_edit"),
+          ("CODE_REPOSITORY","code_repo_edit")]
+perms = [{"resourceScope": {"accountIdentifier": acct, "orgIdentifier": org},
+          "resourceType": "PROJECT", "permission": "core_project_create"}]
+for ident, _ in projects:
+    for rtype, perm in needed:
+        perms.append({"resourceScope": {"accountIdentifier": acct, "orgIdentifier": org, "projectIdentifier": ident},
+                      "resourceType": rtype, "permission": perm})
+req = urllib.request.Request(os.environ["BASE"] + "/authz/api/acl", method="POST",
+      data=json.dumps({"principal": {"principalIdentifier": me, "principalType": "USER"}, "permissions": perms}).encode(),
+      headers={"x-api-key": os.environ["PAT"], "Content-Type": "application/json"})
+try:
+    acl = json.load(urllib.request.urlopen(req, timeout=30))["data"]["accessControlList"]
+except Exception:
+    sys.exit(2)
+ok = {}
+create = False
+for a in acl:
+    sc = a["resourceScope"]
+    if a["permission"] == "core_project_create":
+        create = a["permitted"]
+        continue
+    pid = sc.get("projectIdentifier")
+    ok[pid] = ok.get(pid, True) and a["permitted"]
+print("CREATE\t" + ("yes" if create else "no"))
+for ident, name in projects:
+    if ok.get(ident):
+        print(ident + "\t" + name)
+' 2>/dev/null)
+  if [ -z "$eligible" ]; then
+    print_error "Couldn't check your project permissions in organization '$org' (Harness API error)" >&2
+    return 1
+  fi
+  can_create=$(printf '%s\n' "$eligible" | grep '^CREATE' | cut -f2)
+  local usable
+  usable=$(printf '%s\n' "$eligible" | grep -v '^CREATE' | grep -v '^$')
+  local n=0
+  [ -n "$usable" ] && n=$(printf '%s\n' "$usable" | wc -l | tr -d ' ')
+
+  if [ "$n" = "0" ] && [ "$can_create" != "yes" ]; then
+    {
+      echo ""
+      print_error "You don't have Project Admin rights on any project in organization '$org',"
+      echo "  and you aren't allowed to create projects there."
+      echo "  Check that you picked the right organization. If you did, ask whoever manages"
+      echo "  the Harness project to make you Project Admin on it, then run this script again."
+    } >&2
+    return 1
+  fi
+
+  # Default: previous answer if still usable, else the only usable project, else 1
+  local defnum=1 i=0 line
+  if [ -n "$usable" ]; then
+    while IFS= read -r line; do
+      i=$((i + 1))
+      [ "$(printf '%s' "$line" | cut -f1)" = "$def" ] && defnum=$i
+    done <<EOF
+$usable
+EOF
+  fi
+  local createnum=$((n + 1))
+  [ "$n" = "0" ] && defnum=$createnum
+
+  {
+    echo ""
+    echo "Harness project for the demo - choose from the projects in '$org' where you are"
+    echo "a Project Admin:"
+    if [ -n "$usable" ]; then
+      printf '%s\n' "$usable" | awk -F'\t' '{printf "  %d) %s   (identifier: %s)\n", NR, $2, $1}'
+    fi
+    [ "$can_create" = "yes" ] && echo "  ${createnum}) Create a NEW project (you have permission to create projects)"
+    echo ""
+  } >&2
+
+  local ans name ident
+  while true; do
+    read -r -p "Project number [${defnum}]: " ans
+    ans=$(printf '%s' "${ans:-$defnum}" | tr -d '[:space:]')
+    if printf '%s' "$ans" | grep -Eq '^[0-9]+$'; then
+      if [ "$ans" -ge 1 ] && [ "$ans" -le "$n" ]; then
+        line=$(printf '%s\n' "$usable" | sed -n "${ans}p")
+        printf '%s\t%s\texisting\n' "$(printf '%s' "$line" | cut -f1)" "$(printf '%s' "$line" | cut -f2)"
+        return 0
+      fi
+      if [ "$can_create" = "yes" ] && [ "$ans" = "$createnum" ]; then
+        read -r -p "Name for the new project: " name
+        name=$(printf '%s' "$name" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        if [ -n "$name" ]; then
+          ident=$(printf '%s' "$name" | sed 's/[^a-zA-Z0-9]/_/g; s/__*/_/g; s/^_//; s/_$//')
+          printf '%s\t%s\tnew\n' "$ident" "$name"
+          return 0
+        fi
+      fi
+    fi
+    echo "Enter one of the numbers listed above." >&2
   done
 }
 

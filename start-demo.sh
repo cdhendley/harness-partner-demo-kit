@@ -152,7 +152,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/demo-lib.sh
 source "$SCRIPT_DIR/scripts/demo-lib.sh"
 
-# Participant ID: lets several people share one Harness project without collisions.
+# Participant ID (shown to users as "name/ID"): lets several people share one Harness project.
 # Asked on every run (previous answer is the default); --participant pre-answers it.
 ensure_participant_id() {
   if [ "$PARTICIPANT_RESOLVED" = true ]; then
@@ -164,34 +164,122 @@ ensure_participant_id() {
     PARTICIPANT_ID="$PARTICIPANT_FLAG"
   else
     echo ""
-    echo "Participant ID - needed when several people share one Harness project."
-    echo "Use the ID your workshop lead gave you (e.g. 'alex'). It's appended to everything"
-    echo "this kit creates (workshop_k8s_alex, Dev alex, alex-k8s-delegate, ...)."
-    echo "Leave it empty only if nobody else uses the project."
-    if [ -n "$previous" ]; then
-      read -r -p "Participant ID [$previous] (type 'none' for no ID): " ans
-      ans=${ans:-$previous}
-    else
-      read -r -p "Participant ID (Enter for none): " ans
-    fi
-    [ "$ans" = "none" ] && ans=""
-    PARTICIPANT_ID=$(normalize_participant_id "$ans")
+    echo "Your name/ID - just type your name, e.g. 'alex' or 'jsmith'."
+    echo "It tags the Harness resources this kit creates for you (workshop_k8s_alex, 'Dev alex',"
+    echo "alex-k8s-delegate, ...) so they don't clash with anyone else's in the shared project."
+    echo "Lowercase letters and digits, starting with a letter, max 20. Use the same one every run."
+    echo "(Type 'none' only if nobody else uses this Harness project.)"
   fi
-  while ! is_valid_participant_id "$PARTICIPANT_ID"; do
-    print_error "Participant ID '$PARTICIPANT_ID' is invalid (1-20 lowercase letters/digits, starting with a letter)"
-    read -r -p "Participant ID (Enter for none): " ans
-    PARTICIPANT_ID=$(normalize_participant_id "$ans")
+  while true; do
+    if [ "$PARTICIPANT_FLAG_SET" = true ]; then
+      PARTICIPANT_FLAG_SET=false   # flag pre-answers once; any re-ask below is interactive
+    else
+      if [ -n "$previous" ]; then
+        read -r -p "Your name/ID [$previous]: " ans
+        ans=${ans:-$previous}
+      else
+        read -r -p "Your name/ID: " ans
+      fi
+      if [ -z "$ans" ]; then
+        print_error "Please type a name/ID (or 'none' if nobody else uses this project)"
+        continue
+      fi
+      [ "$ans" = "none" ] && ans=""
+      PARTICIPANT_ID=$(normalize_participant_id "$ans")
+    fi
+    if ! is_valid_participant_id "$PARTICIPANT_ID"; then
+      print_error "'$PARTICIPANT_ID' can't be used: lowercase letters and digits only, starting with a letter, max 20 (e.g. alex, jsmith2)"
+      continue
+    fi
+    # Already taken by someone else in the chosen (existing) project? Needs the token, org and
+    # project, which collect_harness_settings asks for first.
+    if [ "$PROJECT_CHOICE" = "existing" ] && [ -n "$HARNESS_PAT" ] && \
+       ! participant_collision_check "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID" kit/terraform.tfstate; then
+      previous=""
+      continue
+    fi
+    break
   done
   if [ -n "$previous" ] && [ "$PARTICIPANT_ID" != "$previous" ]; then
-    print_info "Participant ID changed from '$previous' - Terraform will create a new set of resources for '$PARTICIPANT_ID'"
+    print_info "Name/ID changed from '$previous' - Terraform will create a new, separate set of resources for '$PARTICIPANT_ID'"
   fi
   if [ -n "$PARTICIPANT_ID" ]; then
-    print_status "Participant ID: $PARTICIPANT_ID (delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
+    print_status "Name/ID: $PARTICIPANT_ID (your resources end in _$PARTICIPANT_ID; delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
   else
-    print_info "No participant ID (single-user names; delegate: local-k8s-delegate)"
+    print_info "No name/ID: resources get the original single-user names (delegate: local-k8s-delegate)"
   fi
   config_set "$CONFIG_FILE" PARTICIPANT_ID "$PARTICIPANT_ID"
   PARTICIPANT_RESOLVED=true
+}
+
+# Harness account, token, organization, project and participant ID - asked once per run, up
+# front, so the image build, Terraform and the delegate all use the same answers. Previous
+# answers (from .demo-config) are the defaults.
+collect_harness_settings() {
+  print_section "Harness Settings"
+
+  # Account ID
+  local saved_account ans
+  saved_account=$(config_get "$CONFIG_FILE" HARNESS_ACCOUNT_ID)
+  if [ -z "$saved_account" ] && [ -f "kit/se-parms.tfvars" ]; then
+    saved_account=$(grep account_id kit/se-parms.tfvars | cut -d'"' -f2 2>/dev/null || echo "")
+    case "$saved_account" in *"harness account id"*|*VEuU4vZ6QmSJZcgvnccqYQ*) saved_account="" ;; esac
+  fi
+  echo ""
+  echo "Harness account ID: the ID right after /account/ in any Harness URL,"
+  echo "e.g. https://app.harness.io/ng/account/<ACCOUNT ID>/..."
+  while true; do
+    if [ -n "$saved_account" ]; then
+      read -r -p "Harness account ID [$saved_account]: " ans
+      ans=${ans:-$saved_account}
+    else
+      read -r -p "Harness account ID: " ans
+    fi
+    ans=$(printf '%s' "$ans" | tr -d '[:space:]')
+    [ -n "$ans" ] && break
+    print_error "The account ID can't be empty"
+  done
+  HARNESS_ACCOUNT_ID="$ans"
+
+  # API token (validated against the account; re-asked only if missing or rejected)
+  if [ -n "$DEMO_BASE_PAT" ]; then
+    HARNESS_PAT="$DEMO_BASE_PAT"
+    ensure_valid_harness_pat "DEMO_BASE_PAT"
+  else
+    HARNESS_PAT=$(config_get "$CONFIG_FILE" HARNESS_PAT)
+    if [ -z "$HARNESS_PAT" ]; then
+      prompt_for_harness_pat
+    else
+      ensure_valid_harness_pat ".demo-config"
+    fi
+  fi
+
+  # Organization (numbered list of the orgs this token can see)
+  HARNESS_ORG_ID=$(choose_harness_org "$HARNESS_ACCOUNT_ID" "$ORG_FLAG" "$(config_get "$CONFIG_FILE" HARNESS_ORG_ID)")
+  print_status "Organization: $HARNESS_ORG_ID"
+
+  # Project (only projects where this user is Project Admin; "new" only if allowed)
+  local choice
+  if ! choice=$(choose_harness_project "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$(config_get "$CONFIG_FILE" PROJECT_IDENTIFIER)"); then
+    exit 1
+  fi
+  PROJECT_IDENTIFIER=$(printf '%s' "$choice" | cut -f1)
+  PROJECT_NAME=$(printf '%s' "$choice" | cut -f2)
+  PROJECT_CHOICE=$(printf '%s' "$choice" | cut -f3)
+  if [ "$PROJECT_CHOICE" = "existing" ]; then
+    print_status "Project: $PROJECT_NAME (identifier: $PROJECT_IDENTIFIER) - existing project, will be reused"
+  else
+    print_status "Project: $PROJECT_NAME - will be created"
+  fi
+
+  ensure_participant_id
+
+  config_set "$CONFIG_FILE" HARNESS_ACCOUNT_ID "$HARNESS_ACCOUNT_ID"
+  config_set "$CONFIG_FILE" HARNESS_ORG_ID "$HARNESS_ORG_ID"
+  config_set "$CONFIG_FILE" HARNESS_PAT "$HARNESS_PAT"
+  config_set "$CONFIG_FILE" PROJECT_NAME "$PROJECT_NAME"
+  config_set "$CONFIG_FILE" PROJECT_IDENTIFIER "$PROJECT_IDENTIFIER"
+  HARNESS_SETTINGS_COLLECTED=true
 }
 
 print_harness_pat_instructions() {
@@ -209,12 +297,27 @@ print_harness_pat_instructions() {
   echo ""
 }
 
-validate_harness_pat() {
+# Prints why a Harness token can't be used, or nothing if it works. The shape checks are
+# local; only a well-formed token is sent to Harness.
+harness_pat_problem() {
   local pat="$1"
   local account_id="$2"
 
-  if [ -z "$pat" ] || [ -z "$account_id" ]; then
-    return 1
+  if [ -z "$pat" ]; then
+    echo "No token entered. Paste the token (it starts with pat.)."
+    return
+  fi
+  case "$pat" in
+    pat.*) ;;
+    *)
+      echo "That isn't an API token. A token starts with \"pat.\" and has 4 parts separated by dots."
+      echo "You may have copied the API KEY name or ID - open the key and click \"+ Token\" to create a token under it."
+      return
+      ;;
+  esac
+  if [ "$(printf '%s' "$pat" | awk -F. '{print NF}')" != "4" ]; then
+    echo "That token looks incomplete - it should look like pat.<account>.<id>.<secret>. Copy it again in full."
+    return
   fi
 
   local http_code
@@ -222,42 +325,42 @@ validate_harness_pat() {
     "https://app.harness.io/ng/api/user/currentUser?accountIdentifier=${account_id}" \
     -H "x-api-key: ${pat}" \
     -H "Content-Type: application/json" 2>/dev/null)
-
-  [ "$http_code" = "200" ]
+  case "$http_code" in
+    200) ;;
+    000) echo "Couldn't reach app.harness.io - check your network/VPN." ;;
+    *)   echo "Harness rejected this token (expired, deleted, or mistyped). Create a new token and paste it." ;;
+  esac
 }
 
 prompt_for_harness_pat() {
+  local problem
+  print_harness_pat_instructions
   while true; do
-    print_harness_pat_instructions
-    read -p "Enter your Harness PAT: " HARNESS_PAT
+    read -r -p "Paste your Harness API token (starts with pat.): " HARNESS_PAT
+    HARNESS_PAT=$(printf '%s' "$HARNESS_PAT" | tr -d '[:space:]')
 
-    if [ -z "$HARNESS_PAT" ]; then
-      print_error "PAT cannot be empty"
-      continue
-    fi
-
-    print_info "Validating Harness PAT..."
-    if validate_harness_pat "$HARNESS_PAT" "$HARNESS_ACCOUNT_ID"; then
-      print_status "Harness PAT validated"
+    print_info "Checking the token..."
+    problem=$(harness_pat_problem "$HARNESS_PAT" "$HARNESS_ACCOUNT_ID")
+    if [ -z "$problem" ]; then
+      print_status "Harness token OK"
       return 0
     fi
-
-    print_error "That token is not valid for account ${HARNESS_ACCOUNT_ID}"
-    print_info "Common causes: token expired/revoked, or you created an API key but not a + Token under it"
+    print_error "$problem"
   done
 }
 
 ensure_valid_harness_pat() {
   local source_label="$1"
+  local problem
 
-  print_info "Validating Harness PAT from ${source_label}..."
-  if validate_harness_pat "$HARNESS_PAT" "$HARNESS_ACCOUNT_ID"; then
-    print_status "Harness PAT validated"
+  print_info "Checking the Harness token from ${source_label}..."
+  problem=$(harness_pat_problem "$HARNESS_PAT" "$HARNESS_ACCOUNT_ID")
+  if [ -z "$problem" ]; then
+    print_status "Harness token OK"
     return 0
   fi
 
-  print_error "Harness PAT from ${source_label} is invalid or expired"
-  print_info "Generate a new token: Profile > My API Keys & Tokens > your key > + Token"
+  print_error "The token from ${source_label} can't be used: $problem"
   prompt_for_harness_pat
 }
 
@@ -958,12 +1061,16 @@ else
   PROMETHEUS_PID=$!
 fi
 
+# Harness account/token/org/project/participant - before images are built, so the lab
+# guides are personalized with the real project and participant ID
+collect_harness_settings
+
 # Build and push Docker images? (--skip-docker-build pre-answers "no")
 if [ "$SKIP_DOCKER_BUILD_FLAG" != true ]; then
   echo ""
   echo "Build and push the demo's Docker images (backend, test, docs) to your Docker Hub?"
   echo "Answer Yes on your first run, after changing code, or after changing your project"
-  echo "name or participant ID (the lab guides are built into the docs image)."
+  echo "name or your name/ID (the lab guides are built into the docs image)."
   read -r -p "Build images? [Y/n]: " BUILD_ANSWER
   if [[ "$BUILD_ANSWER" =~ ^[Nn] ]]; then
     SKIP_DOCKER_BUILD=true
@@ -972,62 +1079,6 @@ fi
 
 if [ "$SKIP_DOCKER_BUILD" = false ]; then
   print_section "Building Backend Docker Image"
-
-  # Prompt for project name early (needed for documentation personalization)
-  # Full validation with existence check happens in the Terraform section
-  if [ "$PROJECT_NAME" = "Base Demo" ]; then
-    echo ""
-    echo "Choose a name for your Harness project"
-    echo "This will be displayed in the Harness UI (e.g., 'Partner Workshop', 'ACME Demo')"
-    echo ""
-    echo "Note: Cannot use reserved words like: project, org, account, pipeline, service, etc."
-    echo ""
-    read -p "Enter your Harness Project name [Base Demo]: " USER_PROJECT_NAME
-
-    # Default to "Base Demo" if empty
-    USER_PROJECT_NAME=${USER_PROJECT_NAME:-Base Demo}
-
-    # Reserved words that cannot be used as project names
-    RESERVED_WORDS="project org account pipeline service environment connector secret template infrastructure delegate trigger artifact manifest variable input output stage step group"
-
-    # Function to check if a word is reserved (local to this block)
-    check_reserved() {
-      local word=$(echo "$1" | tr '[:upper:]' '[:lower:]')
-      for reserved in $RESERVED_WORDS; do
-        if [ "$word" = "$reserved" ]; then
-          return 0
-        fi
-      done
-      return 1
-    }
-
-    # Validate project name - reserved words check only
-    VALID_NAME=false
-    while [ "$VALID_NAME" = false ]; do
-      RESERVED_FOUND=false
-      for word in $USER_PROJECT_NAME; do
-        if check_reserved "$word"; then
-          print_error "'$word' is a reserved word and cannot be used in the project name"
-          RESERVED_FOUND=true
-          break
-        fi
-      done
-
-      if [ "$RESERVED_FOUND" = true ]; then
-        read -p "Enter a different project name: " USER_PROJECT_NAME
-        USER_PROJECT_NAME=${USER_PROJECT_NAME:-Base Demo}
-      else
-        VALID_NAME=true
-      fi
-    done
-
-    PROJECT_NAME="$USER_PROJECT_NAME"
-    # Generate identifier from name (alphanumeric and underscores only)
-    PROJECT_IDENTIFIER=$(echo "$PROJECT_NAME" | sed 's/[^a-zA-Z0-9]/_/g' | sed 's/__*/_/g' | sed 's/^_//' | sed 's/_$//')
-    print_status "Project name set to: $PROJECT_NAME"
-    print_info "Project identifier: $PROJECT_IDENTIFIER"
-    echo ""
-  fi
 
   print_info "Checking Docker Hub authentication..."
 
@@ -1263,7 +1314,7 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
   print_info "Personalizing lab documentation..."
   echo "   'dockerhubaccountid' -> '$DOCKER_USERNAME', 'Base Demo' -> '$PROJECT_NAME'"
   if [ -n "$PARTICIPANT_ID" ]; then
-    echo "   Resource names include your participant ID '$PARTICIPANT_ID'"
+    echo "   Resource names include your name/ID '$PARTICIPANT_ID'"
   fi
   if personalize_docs "$SCRIPT_DIR" "$DOCS_BUILD_DIR" "$DOCKER_USERNAME" "$PROJECT_NAME" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID"; then
     print_status "Documentation personalized"
@@ -1400,72 +1451,8 @@ if [ "$SKIP_TERRAFORM" = false ]; then
     # If both are installed, don't start early init - wait for user choice
   fi
 
-  # Collect required variables (or load from cache)
-  HARNESS_ACCOUNT_ID=""
-  HARNESS_PAT=""
+  # Account, token, org and project were collected in "Harness Settings" (collect_harness_settings)
   DOCKER_PAT=""
-
-  print_info "Checking cached credentials..."
-  echo ""
-
-  # Get Harness Account ID
-  # Try to get account_id from config file first
-  if [ -f "$CONFIG_FILE" ]; then
-    HARNESS_ACCOUNT_ID=$(grep "HARNESS_ACCOUNT_ID=" "$CONFIG_FILE" | cut -d'=' -f2)
-    HARNESS_ORG_ID=$(grep "HARNESS_ORG_ID=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
-  fi
-  # Org that holds the demo project (most accounts use "default"; partner accounts may differ)
-  HARNESS_ORG_ID=${HARNESS_ORG_ID:-default}
-
-  # Try to get from se-parms.tfvars if not found
-  if [ -z "$HARNESS_ACCOUNT_ID" ] && [ -f "kit/se-parms.tfvars" ]; then
-    HARNESS_ACCOUNT_ID=$(grep account_id kit/se-parms.tfvars | cut -d'"' -f2 2>/dev/null || echo "")
-    # Check if it's a placeholder
-    if [[ "$HARNESS_ACCOUNT_ID" == *"harness account id"* ]] || [[ "$HARNESS_ACCOUNT_ID" == *"VEuU4vZ6QmSJZcgvnccqYQ"* ]]; then
-      HARNESS_ACCOUNT_ID=""
-    fi
-  fi
-
-  # Prompt if not found
-  if [ -z "$HARNESS_ACCOUNT_ID" ]; then
-    echo "Your Harness Account ID can be found in the URL when viewing your profile"
-    echo "Example: https://app.harness.io/ng/account/VEuU4vZ6QmSJZcgvnccqYQ/settings/overview"
-    echo "         (the ID is: VEuU4vZ6QmSJZcgvnccqYQ)"
-    echo ""
-    read -p "Enter your Harness Account ID: " HARNESS_ACCOUNT_ID
-
-    while [ -z "$HARNESS_ACCOUNT_ID" ]; do
-      print_error "Account ID cannot be empty"
-      read -p "Enter your Harness Account ID: " HARNESS_ACCOUNT_ID
-    done
-  else
-    print_status "Using cached Harness Account ID: $HARNESS_ACCOUNT_ID"
-  fi
-
-  # Get Harness PAT
-  # Check environment variable first
-  if [ -n "$DEMO_BASE_PAT" ]; then
-    HARNESS_PAT="$DEMO_BASE_PAT"
-    print_status "Using Harness PAT from DEMO_BASE_PAT environment variable"
-    ensure_valid_harness_pat "DEMO_BASE_PAT"
-  else
-    # Try to get from config file
-    if [ -f "$CONFIG_FILE" ]; then
-      HARNESS_PAT=$(grep "HARNESS_PAT=" "$CONFIG_FILE" | cut -d'=' -f2)
-    fi
-
-    # Prompt if not found
-    if [ -z "$HARNESS_PAT" ]; then
-      prompt_for_harness_pat
-    else
-      print_status "Using cached Harness PAT"
-      ensure_valid_harness_pat ".demo-config"
-    fi
-  fi
-
-  # Harness organization (asked every run; --org pre-answers it)
-  HARNESS_ORG_ID=$(choose_harness_org "$HARNESS_ACCOUNT_ID" "$ORG_FLAG" "$HARNESS_ORG_ID")
-  print_status "Organization: $HARNESS_ORG_ID"
 
   # Get Docker password/PAT
   # Try to get from config file first
@@ -1555,64 +1542,22 @@ if [ "$SKIP_TERRAFORM" = false ]; then
       "https://app.harness.io/ng/api/projects?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=${HARNESS_ORG_ID}&searchTerm=$(printf '%s' "$name" | sed 's/ /%20/g')&pageSize=50" \
       -H "x-api-key: ${HARNESS_PAT}" 2>/dev/null \
       | python3 -c 'import sys,json
-name=sys.argv[1]
+name=sys.argv[1].strip().lower()
 try:
     for p in json.load(sys.stdin)["data"]["content"]:
-        if p["project"]["name"] == name:
+        if p["project"]["name"].strip().lower() == name:
             print(p["project"]["identifier"]); break
 except Exception:
     pass' "$name"
   }
 
-  # Track if project name was set from Docker build section (custom name)
-  PROJECT_FROM_DOCKER_BUILD=false
-  if [ -n "$PROJECT_NAME" ] && [ "$PROJECT_NAME" != "Base Demo" ]; then
-    PROJECT_FROM_DOCKER_BUILD=true
-  fi
-
-  # Try to get from config file if not already set
-  if [ -z "$PROJECT_NAME" ] || [ "$PROJECT_NAME" = "Base Demo" ]; then
-    if [ -f "$CONFIG_FILE" ]; then
-      CACHED_PROJECT=$(grep "PROJECT_NAME=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2-)
-      CACHED_IDENTIFIER=$(grep "PROJECT_IDENTIFIER=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
-      if [ -n "$CACHED_PROJECT" ] && [ "$CACHED_PROJECT" != "Base Demo" ]; then
-        PROJECT_NAME="$CACHED_PROJECT"
-        PROJECT_IDENTIFIER="$CACHED_IDENTIFIER"
-        print_status "Using cached project name: $PROJECT_NAME"
-      fi
-    fi
-  fi
-
-  # Try to get from se-parms.tfvars if still not found
-  if [ -z "$PROJECT_NAME" ] || [ "$PROJECT_NAME" = "Base Demo" ]; then
-    if [ -f "kit/se-parms.tfvars" ]; then
-      TF_PROJECT=$(grep 'project_name' kit/se-parms.tfvars 2>/dev/null | cut -d'"' -f2)
-      TF_IDENTIFIER=$(grep 'project_identifier' kit/se-parms.tfvars 2>/dev/null | cut -d'"' -f2)
-      if [ -n "$TF_PROJECT" ] && [ "$TF_PROJECT" != "Base Demo" ]; then
-        PROJECT_NAME="$TF_PROJECT"
-        PROJECT_IDENTIFIER="$TF_IDENTIFIER"
-        print_status "Using project name from tfvars: $PROJECT_NAME"
-      fi
-    fi
-  fi
-
-  # Prompt for project name if still using default
-  if [ -z "$PROJECT_NAME" ] || [ "$PROJECT_NAME" = "Base Demo" ]; then
-    echo ""
-    echo "Choose a name for your Harness project"
-    echo "This will be displayed in the Harness UI (e.g., 'Partner Workshop', 'ACME Demo')"
-    echo ""
-    echo "Note: Cannot use reserved words like: project, org, account, pipeline, service, etc."
-    echo ""
-    read -p "Enter your Harness Project name [Base Demo]: " PROJECT_NAME
-
-    # Default to "Base Demo" if empty
-    PROJECT_NAME=${PROJECT_NAME:-Base Demo}
-  fi
-
-  # Validate project name and check existence
-  # Always do existence check (even for names from cache/config) for first-time Terraform apply
+  # An existing project picked from the list is reused as-is. Only a NEW project name is
+  # validated (reserved words, an existing project with that name, identifier collisions).
   VALID_NAME=false
+  if [ "$PROJECT_CHOICE" = "existing" ]; then
+    REUSE_EXISTING_PROJECT=true
+    VALID_NAME=true
+  fi
   while [ "$VALID_NAME" = false ]; do
     # Check for reserved words (check each word in the project name)
     RESERVED_FOUND=false
@@ -1696,17 +1641,17 @@ except Exception:
     # Someone else already uses this participant ID (or no ID) in this project: ask for another
     while [ "$REUSE_EXISTING_PROJECT" = true ] && \
           ! participant_collision_check "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID" kit/terraform.tfstate; do
-      read -r -p "Enter a different participant ID (ask your workshop lead), or Ctrl-C to stop: " NEW_PID
+      read -r -p "Choose a different name/ID (e.g. add an initial: alexm), or Ctrl-C to stop: " NEW_PID
       NEW_PID=$(normalize_participant_id "$NEW_PID")
       if [ -n "$NEW_PID" ] && is_valid_participant_id "$NEW_PID"; then
         PARTICIPANT_ID="$NEW_PID"
         config_set "$CONFIG_FILE" PARTICIPANT_ID "$PARTICIPANT_ID"
-        print_status "Participant ID: $PARTICIPANT_ID (delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
+        print_status "Name/ID: $PARTICIPANT_ID (delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
         if [ "$SKIP_DOCKER_BUILD" = false ]; then
-          print_info "The lab guides were already built with the old ID; afterwards rerun ./start-demo.sh and answer Yes to 'Build images?'"
+          print_info "The lab guides were already built with the old name/ID; afterwards rerun ./start-demo.sh and answer Yes to 'Build images?'"
         fi
       else
-        print_error "Participant ID must be 1-20 lowercase letters/digits, starting with a letter"
+        print_error "A name/ID must be 1-20 lowercase letters/digits, starting with a letter"
       fi
     done
   fi

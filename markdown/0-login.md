@@ -72,7 +72,6 @@ The script will prompt you for:
 - Docker Hub username and password
 - Your Harness project name (an existing project is reused — enter its exact display name)
 - A **participant ID** — only needed when several people share one Harness project (see below)
-- **Apple Silicon Macs only**: whether Colima runs natively (arm64, recommended) or emulates amd64
 
 > **Sharing one project with other people?** Each person picks a short participant ID (lowercase letters/digits, e.g. `alex`). Everything the kit creates gets that ID appended — connectors, environments, the backend service, the code repository, and your delegate (`alex-k8s-delegate`) — so nobody collides. These lab guides are personalized with *your* names automatically. If you are the only person using the project, leave the participant ID empty.
 
