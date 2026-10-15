@@ -1851,11 +1851,30 @@ EOF
     fi
 
     # Apply (show output for visibility)
+    # WORKAROUND, cause unknown: Harness's import of the GitHub demo repo intermittently fails
+    # with "Access denied to <repo> at github" (seen ~50% of requests, independent of request
+    # headers or our config). Each attempt is independent, so retry that one error only.
     print_info "Running $IAC_CMD apply (this may take 3-5 minutes)..."
-    if $IAC_CMD apply -auto-approve plan.tfplan; then
+    APPLY_LOG="$TEMP_DIR/terraform_apply.log"
+    APPLY_ATTEMPT=1
+    APPLY_MAX=5
+    $IAC_CMD apply -auto-approve plan.tfplan 2>&1 | tee "$APPLY_LOG"
+    APPLY_EXIT=${PIPESTATUS[0]}
+    while [ "$APPLY_EXIT" != "0" ] && [ "$APPLY_ATTEMPT" -lt "$APPLY_MAX" ] && \
+          grep -q "Access denied to .* at github" "$APPLY_LOG"; do
+      APPLY_ATTEMPT=$((APPLY_ATTEMPT + 1))
+      print_info "Harness's import of the demo repo from GitHub failed (intermittent, on Harness's side) - retrying ($APPLY_ATTEMPT/$APPLY_MAX)..."
+      sleep 5
+      $IAC_CMD apply -auto-approve -var="pat=$HARNESS_PAT" -var-file="se-parms.tfvars" 2>&1 | tee "$APPLY_LOG"
+      APPLY_EXIT=${PIPESTATUS[0]}
+    done
+    if [ "$APPLY_EXIT" = "0" ]; then
       print_status "$IAC_CMD apply completed - Harness resources created!"
     else
       print_error "$IAC_CMD apply failed"
+      if grep -q "Access denied to .* at github" "$APPLY_LOG"; then
+        print_info "Harness couldn't import the demo repo from GitHub after $APPLY_MAX tries. This is on Harness's side; run ./start-demo.sh again later."
+      fi
       cd ..
       exit 1
     fi
