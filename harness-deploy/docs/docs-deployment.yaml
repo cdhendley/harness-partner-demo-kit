@@ -17,6 +17,8 @@ spec:
       containers:
       - name: docs
         image: dockerhubaccountid/harness-demo:docs-latest
+        # docs-latest is rebuilt in place; always pull so a redeploy picks up the new image
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
         resources:

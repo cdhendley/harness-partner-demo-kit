@@ -4,17 +4,18 @@
 #
 # This script sets up and starts all local infrastructure needed for the demo:
 # - Kubernetes cluster (platform-specific):
-#   * macOS (Apple Silicon): Colima with Rosetta 2 for AMD64 emulation
+#   * macOS (Apple Silicon): Colima - native arm64 (default) or amd64 emulation
 #   * macOS (Intel): minikube, Rancher Desktop, Docker Desktop, or Colima
 #   * Windows: minikube, Rancher Desktop, or Docker Desktop
 #   * Linux: minikube or other K8s distributions
 # - Prometheus monitoring
-# - Docker image builds (backend, test, docs) with automatic architecture detection
-#   * Detects Apple Silicon (ARM64) and builds for amd64 (Harness Cloud compatibility)
-#   * Intel/AMD builds natively without platform override
+# - Docker image builds (backend, test, docs) with buildx: multi-arch (amd64 + arm64)
+#   so the same tags work on Harness Cloud and on Apple Silicon clusters
 # - Harness resource provisioning via Terraform or OpenTofu
+# - Harness delegate installation (Helm), named to match the connectors
 #
-# Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform]
+# Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform] [--skip-delegate]
+#                        [--participant <id>] [--colima-arch native|amd64]
 #
 
 set -e  # Exit on error
@@ -66,6 +67,9 @@ wait_with_spinner() {
 # Configuration
 SKIP_DOCKER_BUILD=false
 SKIP_TERRAFORM=false
+SKIP_DELEGATE=false
+PARTICIPANT_FLAG=""
+COLIMA_MODE_FLAG=""
 CONFIG_FILE=".demo-config"
 PROJECT_NAME=""
 PROJECT_IDENTIFIER=""
@@ -91,9 +95,22 @@ while [[ $# -gt 0 ]]; do
       SKIP_TERRAFORM=true
       shift
       ;;
+    --skip-delegate)
+      SKIP_DELEGATE=true
+      shift
+      ;;
+    --participant)
+      PARTICIPANT_FLAG="${2:-}"
+      PARTICIPANT_FLAG_SET=true
+      shift 2
+      ;;
+    --colima-arch)
+      COLIMA_MODE_FLAG="${2:-}"
+      shift 2
+      ;;
     *)
       echo -e "${RED}Unknown option: $1${NC}"
-      echo "Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform]"
+      echo "Usage: ./start-demo.sh [--skip-docker-build] [--skip-terraform] [--skip-delegate] [--participant <id>] [--colima-arch native|amd64]"
       exit 1
       ;;
   esac
@@ -121,6 +138,45 @@ print_section() {
   echo ""
   echo -e "${BLUE}▶ $1${NC}"
   echo "----------------------------------------"
+}
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/demo-lib.sh
+source "$SCRIPT_DIR/scripts/demo-lib.sh"
+
+# Participant ID: lets several people share one Harness project without collisions.
+# Order: --participant flag > PARTICIPANT_ID in .demo-config (if ever answered) > prompt.
+ensure_participant_id() {
+  if [ "$PARTICIPANT_RESOLVED" = true ]; then
+    return 0
+  fi
+  if [ "$PARTICIPANT_FLAG_SET" = true ]; then
+    PARTICIPANT_ID="$PARTICIPANT_FLAG"
+  elif grep -q "^PARTICIPANT_ID=" "$CONFIG_FILE" 2>/dev/null; then
+    PARTICIPANT_ID=$(config_get "$CONFIG_FILE" PARTICIPANT_ID)
+  else
+    echo ""
+    echo "Are several people sharing one Harness project for this demo?"
+    echo "If so, give yourself a short participant ID (e.g. your first name: 'casey')."
+    echo "It's appended to everything this kit creates, so nobody collides:"
+    echo "  workshop_k8s_casey, Dev casey, backend casey, casey-k8s-delegate, ..."
+    echo "Leave it empty if you're the only person using the project."
+    echo ""
+    read -r -p "Participant ID (optional): " PARTICIPANT_ID
+    PARTICIPANT_ID=$(normalize_participant_id "$PARTICIPANT_ID")
+  fi
+  while ! is_valid_participant_id "$PARTICIPANT_ID"; do
+    print_error "Participant ID '$PARTICIPANT_ID' is invalid (1-20 lowercase letters/digits, starting with a letter)"
+    read -r -p "Participant ID (optional): " PARTICIPANT_ID
+    PARTICIPANT_ID=$(normalize_participant_id "$PARTICIPANT_ID")
+  done
+  if [ -n "$PARTICIPANT_ID" ]; then
+    print_status "Participant ID: $PARTICIPANT_ID (delegate: $(delegate_name_for "$PARTICIPANT_ID"))"
+  else
+    print_info "No participant ID (single-user names; delegate: local-k8s-delegate)"
+  fi
+  config_set "$CONFIG_FILE" PARTICIPANT_ID "$PARTICIPANT_ID"
+  PARTICIPANT_RESOLVED=true
 }
 
 print_harness_pat_instructions() {
@@ -302,7 +358,8 @@ check_cluster_resources() {
         colima delete -f --data 2>/dev/null || true
         print_info "Starting Colima with correct resources (this may take 5-10 minutes)..."
         if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]); then
-          if colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu ${MIN_CPU_CORES} --memory ${MIN_MEMORY_GB} --kubernetes --runtime docker; then
+          # shellcheck disable=SC2046
+          if colima start $(colima_mode_args "${COLIMA_MODE:-native}") --cpu ${MIN_CPU_CORES} --memory ${MIN_MEMORY_GB} --kubernetes --runtime docker; then
             print_status "Colima restarted successfully with ${MIN_CPU_CORES} CPUs and ${MIN_MEMORY_GB}GB memory"
             return 0  # Resources are now OK
           else
@@ -324,7 +381,7 @@ check_cluster_resources() {
         echo "  colima stop"
         echo "  colima delete --data"
         if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]); then
-          echo "  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu ${MIN_CPU_CORES} --memory ${MIN_MEMORY_GB} --kubernetes --runtime docker"
+          echo "  colima start $(colima_mode_args "${COLIMA_MODE:-native}") --cpu ${MIN_CPU_CORES} --memory ${MIN_MEMORY_GB} --kubernetes --runtime docker"
         else
           echo "  colima start --cpu ${MIN_CPU_CORES} --memory ${MIN_MEMORY_GB} --kubernetes"
         fi
@@ -422,35 +479,34 @@ K8S_TOOL_MISSING=false
 RECOMMENDED_TOOL=""
 
 if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]); then
-  # Apple Silicon Mac - require Colima for AMD64 emulation via Rosetta 2
+  # Apple Silicon Mac - Colima, either native arm64 (default) or amd64 emulation
   RECOMMENDED_TOOL="Colima"
 
-  # Check for all required dependencies
+  # Native vs amd64: --colima-arch flag > COLIMA_ARCH_MODE in .demo-config > prompt
+  COLIMA_MODE=$(choose_colima_mode "${COLIMA_MODE_FLAG:-$(config_get "$CONFIG_FILE" COLIMA_ARCH_MODE)}")
+  config_set "$CONFIG_FILE" COLIMA_ARCH_MODE "$COLIMA_MODE"
+  if [ "$COLIMA_MODE" = "amd64" ]; then
+    print_info "Colima mode: amd64 emulation (qemu; slower)"
+  else
+    print_status "Colima mode: native arm64 (amd64-only images run via Rosetta)"
+  fi
+
+  # Check for all required dependencies (qemu is only needed to emulate amd64)
+  REQUIRED_DEPS="colima docker kubectl"
+  [ "$COLIMA_MODE" = "amd64" ] && REQUIRED_DEPS="$REQUIRED_DEPS qemu lima-additional-guestagents"
   MISSING_DEPS=""
-  if ! command -v colima &> /dev/null; then
-    MISSING_DEPS="$MISSING_DEPS colima"
-  fi
-  if ! command -v docker &> /dev/null; then
-    MISSING_DEPS="$MISSING_DEPS docker"
-  fi
-  if ! command -v kubectl &> /dev/null; then
-    MISSING_DEPS="$MISSING_DEPS kubectl"
-  fi
-  if ! brew list qemu &> /dev/null 2>&1; then
-    MISSING_DEPS="$MISSING_DEPS qemu"
-  fi
-  if ! brew list lima-additional-guestagents &> /dev/null 2>&1; then
-    MISSING_DEPS="$MISSING_DEPS lima-additional-guestagents"
-  fi
+  for dep in $REQUIRED_DEPS; do
+    case "$dep" in
+      qemu|lima-additional-guestagents) brew list "$dep" &> /dev/null || MISSING_DEPS="$MISSING_DEPS $dep" ;;
+      *) command -v "$dep" &> /dev/null || MISSING_DEPS="$MISSING_DEPS $dep" ;;
+    esac
+  done
 
   if [ -n "$MISSING_DEPS" ]; then
     print_error "Missing required dependencies for Apple Silicon:$MISSING_DEPS"
     echo ""
-    echo "Apple Silicon Macs require Colima with Rosetta 2 for AMD64 emulation."
-    echo "This is necessary because Harness Cloud builds AMD64 images."
-    echo ""
-    echo "To install all required dependencies:"
-    echo "  brew install colima docker kubectl qemu lima-additional-guestagents"
+    echo "To install them:"
+    echo "  brew install$MISSING_DEPS"
     echo ""
 
     # Offer to install missing dependencies
@@ -459,25 +515,18 @@ if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]
 
     if [[ "$INSTALL_DEPS" =~ ^[Yy]([Ee][Ss])?$ ]]; then
       print_info "Installing missing dependencies via Homebrew..."
-      if brew install colima docker kubectl qemu lima-additional-guestagents; then
+      # shellcheck disable=SC2086
+      if brew install $MISSING_DEPS; then
         print_status "Dependencies installed successfully"
-        # Check if there's an existing Colima instance that needs to be cleaned up
-        if colima status &> /dev/null; then
-          print_info "Existing Colima instance detected. Stopping and deleting for clean setup..."
-          colima stop
-          colima delete
-        fi
       else
         print_error "Failed to install dependencies. Please install manually:"
-        echo "  brew install colima docker kubectl qemu lima-additional-guestagents"
+        echo "  brew install$MISSING_DEPS"
         K8S_TOOL_MISSING=true
       fi
     else
       echo ""
-      echo "To start Colima with AMD64 emulation after installing dependencies:"
-      echo "  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker"
-      echo ""
-      echo "Note: First startup may take 5-10 minutes while downloading images."
+      echo "After installing, start Colima with:"
+      echo "  $(colima_start_cmd "$COLIMA_MODE")"
       echo ""
       K8S_TOOL_MISSING=true
     fi
@@ -485,60 +534,58 @@ if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]
 
   if [ "$K8S_TOOL_MISSING" != true ] && command -v colima &> /dev/null; then
     print_status "Colima is installed"
-    # Check if Colima is running
     if colima status &> /dev/null; then
-      # Check if running with correct architecture
-      # Note: colima status outputs to stderr, so we need 2>&1
-      COLIMA_ARCH=$(colima status 2>&1 | grep "arch:" | sed 's/.*msg="arch: //' | sed 's/".*//')
-      if [ "$COLIMA_ARCH" = "x86_64" ] || [ "$COLIMA_ARCH" = "amd64" ]; then
-        print_status "Colima is running with AMD64 emulation (Rosetta 2)"
+      # Ask the Docker daemon inside the VM what it actually runs on. (Don't trust
+      # colima.yaml's vmType: an x86_64 VM on Apple Silicon silently runs under qemu.)
+      COLIMA_ARCH=$(docker_daemon_arch)
+      if arch_matches_mode "$COLIMA_MODE" "$COLIMA_ARCH"; then
+        print_status "Colima is running ($COLIMA_ARCH) as chosen"
       else
-        print_error "Colima is running but not with AMD64 architecture (currently: $COLIMA_ARCH)"
+        print_error "Colima is running $COLIMA_ARCH, but you chose '$COLIMA_MODE'"
         echo ""
-        echo "Colima must be restarted with AMD64 emulation."
-        echo "This requires stopping and recreating the Colima VM."
+        echo "Switching requires recreating the Colima VM, including its data disk"
+        echo "(the old cluster's data would otherwise break Kubernetes on the new VM)."
         echo ""
-        read -p "Stop and restart Colima with AMD64 emulation? [Y/n]: " RESTART_COLIMA
+        read -p "Recreate Colima as '$COLIMA_MODE' now? [Y/n]: " RESTART_COLIMA
         RESTART_COLIMA=${RESTART_COLIMA:-yes}
 
         if [[ "$RESTART_COLIMA" =~ ^[Yy]([Ee][Ss])?$ ]]; then
           print_info "Stopping Colima..."
           colima stop
-          print_info "Deleting Colima VM and runtime data..."
+          print_info "Deleting Colima VM and its data disk..."
           colima delete --data -f
-          print_info "Starting Colima with AMD64 emulation and docker runtime (this may take 5-10 minutes)..."
-          colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker
-          print_status "Colima started successfully with AMD64 emulation"
+          print_info "Starting Colima ($COLIMA_MODE; first run may take a few minutes)..."
+          # shellcheck disable=SC2046
+          colima start $(colima_mode_args "$COLIMA_MODE") $COLIMA_RESOURCE_ARGS
+          print_status "Colima started ($COLIMA_MODE)"
         else
-          print_error "Cannot proceed without AMD64 architecture"
-          echo ""
-          echo "To restart manually:"
-          echo "  colima stop && colima delete --data"
-          echo "  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker"
-          echo ""
-          K8S_TOOL_MISSING=true
+          print_info "Keeping the current Colima VM ($COLIMA_ARCH)"
+          if arch_matches_mode native "$COLIMA_ARCH"; then COLIMA_MODE=native; else COLIMA_MODE=amd64; fi
+          config_set "$CONFIG_FILE" COLIMA_ARCH_MODE "$COLIMA_MODE"
         fi
       fi
     else
-      print_info "Colima is not running - starting it now..."
+      print_info "Colima is not running - starting it now ($COLIMA_MODE)..."
       echo ""
-
-      # Always clean up old runtime data before starting
-      # This ensures a clean start
-      print_info "Cleaning up any existing Colima data (required for docker runtime)..."
-      colima delete --data -f 2>/dev/null || true
-
-      print_info "Starting Colima with AMD64 emulation and docker runtime (this may take 5-10 minutes on first run)..."
-      if colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker; then
-        print_status "Colima started successfully with docker runtime"
+      # shellcheck disable=SC2046
+      if colima start $(colima_mode_args "$COLIMA_MODE") $COLIMA_RESOURCE_ARGS; then
+        print_status "Colima started successfully"
       else
-        print_error "Failed to start Colima"
-        echo ""
-        echo "Please try starting manually:"
-        echo "  colima delete --data"
-        echo "  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker"
-        echo ""
-        K8S_TOOL_MISSING=true
+        # A leftover VM/data disk from a different architecture or runtime can block start
+        print_info "Start failed - retrying with a clean Colima VM (deleting old VM data)..."
+        colima delete --data -f 2>/dev/null || true
+        # shellcheck disable=SC2046
+        if colima start $(colima_mode_args "$COLIMA_MODE") $COLIMA_RESOURCE_ARGS; then
+          print_status "Colima started successfully"
+        else
+          print_error "Failed to start Colima"
+          echo ""
+          echo "Please try starting manually:"
+          echo "  colima delete --data"
+          echo "  $(colima_start_cmd "$COLIMA_MODE")"
+          echo ""
+          K8S_TOOL_MISSING=true
+        fi
       fi
     fi
   fi
@@ -666,14 +713,15 @@ if kubectl config current-context 2>/dev/null | grep -q "colima"; then
       exit 1
     fi
 
-    if [ "$CLUSTER_ARCH" = "amd64" ]; then
-      print_status "Cluster is running AMD64 (correct for Harness Cloud compatibility)"
+    if arch_matches_mode "${COLIMA_MODE:-native}" "$CLUSTER_ARCH"; then
+      print_status "Cluster architecture: $CLUSTER_ARCH (matches '${COLIMA_MODE:-native}' mode)"
     else
-      print_error "Cluster is running $CLUSTER_ARCH architecture (expected amd64)"
+      print_error "Cluster is running $CLUSTER_ARCH, but Colima mode is '${COLIMA_MODE:-native}'"
       echo ""
-      echo "Please restart Colima with AMD64 emulation:"
-      echo "  colima stop && colima delete --data"
-      echo "  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker"
+      echo "Recreate Colima (including its data disk) in the chosen mode:"
+      echo "  colima stop && colima delete --data -f"
+      echo "  $(colima_start_cmd "${COLIMA_MODE:-native}")"
+      echo "Or rerun with --colima-arch native|amd64 to match the running cluster."
       exit 1
     fi
   fi
@@ -696,7 +744,7 @@ else
     echo ""
     if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]); then
       echo "For Apple Silicon Macs, start Colima:"
-      echo "  colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker"
+      echo "  $(colima_start_cmd "${COLIMA_MODE:-native}")"
     else
       echo "Please ensure one of the following is running:"
       echo "  - minikube (run 'minikube start')"
@@ -714,7 +762,8 @@ if [ "$K8S_TYPE" = "colima" ]; then
   if ! colima status &> /dev/null; then
     print_info "Starting Colima (this may take 5-10 minutes on first run)..."
     if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]); then
-      colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker
+      # shellcheck disable=SC2046
+      colima start $(colima_mode_args "${COLIMA_MODE:-native}") $COLIMA_RESOURCE_ARGS
     else
       colima start --cpu 4 --memory 8 --kubernetes
     fi
@@ -764,7 +813,7 @@ if [ $RETRIES -eq $MAX_RETRIES ]; then
   if [ "$K8S_TYPE" = "colima" ]; then
     echo "  1. Check Colima status: colima status"
     if [ "$OS_TYPE" = "macos" ] && ([ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]); then
-      echo "  2. Try restarting Colima: colima stop && colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes --runtime docker"
+      echo "  2. Try restarting Colima: colima stop && $(colima_start_cmd "${COLIMA_MODE:-native}")"
     else
       echo "  2. Try restarting Colima: colima stop && colima start --cpu 4 --memory 8 --kubernetes"
     fi
@@ -1161,116 +1210,62 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
       fi
     fi
 
-    # Save credentials to config file for future runs (only if file doesn't exist yet)
-    # This preserves any existing credentials that were saved by the Terraform section
-    if [ ! -f "$CONFIG_FILE" ] || [ ! -s "$CONFIG_FILE" ]; then
-      {
-        echo "DOCKER_USERNAME=$DOCKER_USERNAME"
-        echo "DOCKER_PAT=$DOCKER_LOGIN_PASSWORD"
-      } > "$CONFIG_FILE"
+    # Save Docker credentials for future runs if they aren't stored yet
+    # (preserves anything else already in the config, e.g. saved by the Terraform section)
+    if [ -z "$(config_get "$CONFIG_FILE" DOCKER_PAT)" ]; then
+      config_set "$CONFIG_FILE" DOCKER_USERNAME "$DOCKER_USERNAME"
+      config_set "$CONFIG_FILE" DOCKER_PAT "$DOCKER_LOGIN_PASSWORD"
       print_info "Saved credentials to $CONFIG_FILE for future runs"
     fi
   fi
 
-  # Show Docker daemon architecture (with Colima x86_64 mode, this should be amd64)
-  DOCKER_ARCH=$(docker info --format '{{.Architecture}}' 2>/dev/null || echo 'unknown')
-  print_info "Docker daemon architecture: $DOCKER_ARCH"
+  # Architecture of the Docker daemon (the Colima VM on Macs)
+  DOCKER_ARCH=$(docker_daemon_arch)
+  print_info "Docker daemon architecture: ${DOCKER_ARCH:-unknown}"
 
-  # Prepare documentation files before parallel builds
-  print_info "Preparing documentation for build..."
-
-  # Copy images into markdown directory for Docker build context
-  if [ -d "images" ]; then
-    cp -r images markdown/ 2>/dev/null || true
+  # buildx (BuildKit) builds amd64 + arm64 images under one tag, so the same images run on
+  # Harness Cloud (amd64) and on native Apple Silicon clusters (arm64)
+  if ! ensure_buildx; then
+    print_info "Continuing with the legacy builder: images will be ${DOCKER_ARCH:-the local architecture} only"
   fi
 
-  # Replace placeholders with actual values in markdown files
+  # Participant ID is needed now: the lab docs are personalized with it
+  ensure_participant_id
+
+  # Personalize the lab documentation in a temporary copy (the repo's markdown is untouched)
+  DOCS_BUILD_DIR="$TEMP_DIR/docs-build"
   print_info "Personalizing lab documentation..."
-  echo ""
-  echo "   Replacing 'dockerhubaccountid' with '$DOCKER_USERNAME'"
-  echo "   Replacing 'Base Demo' with '$PROJECT_NAME'"
-  echo "   This makes the instructions easier to follow with your actual configuration."
-  echo ""
-  if command -v sed &> /dev/null; then
-    for mdfile in markdown/*.md; do
-      if [ -f "$mdfile" ]; then
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-          sed -i '.bak' "s/dockerhubaccountid/$DOCKER_USERNAME/g" "$mdfile"
-          rm -f "${mdfile}.bak"
-          if [ "$PROJECT_NAME" != "Base Demo" ]; then
-            sed -i '.bak' "s/Base Demo/$PROJECT_NAME/g" "$mdfile"
-            rm -f "${mdfile}.bak"
-            sed -i '.bak' "s/Base_Demo/$PROJECT_IDENTIFIER/g" "$mdfile"
-            rm -f "${mdfile}.bak"
-          fi
-        else
-          sed -i "s/dockerhubaccountid/$DOCKER_USERNAME/g" "$mdfile"
-          if [ "$PROJECT_NAME" != "Base Demo" ]; then
-            sed -i "s/Base Demo/$PROJECT_NAME/g" "$mdfile"
-            sed -i "s/Base_Demo/$PROJECT_IDENTIFIER/g" "$mdfile"
-          fi
-        fi
-      fi
-    done
-    print_status "Documentation personalized successfully"
+  echo "   'dockerhubaccountid' -> '$DOCKER_USERNAME', 'Base Demo' -> '$PROJECT_NAME'"
+  if [ -n "$PARTICIPANT_ID" ]; then
+    echo "   Resource names include your participant ID '$PARTICIPANT_ID'"
+  fi
+  if personalize_docs "$SCRIPT_DIR" "$DOCS_BUILD_DIR" "$DOCKER_USERNAME" "$PROJECT_NAME" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID"; then
+    print_status "Documentation personalized"
+  else
+    print_error "Could not prepare the documentation build"
   fi
 
-  # ============================================================
-  # SEQUENTIAL DOCKER BUILDS - Build images one at a time
-  # ============================================================
   print_section "Building Docker Images"
   echo ""
-  print_info "Building 3 images: backend, test, docs"
+  print_info "Building 3 images: backend, test, docs (platforms: $DEMO_BUILD_PLATFORMS)"
   echo ""
 
   BUILD_FAILED=false
 
-  # Build backend image
   print_info "Building backend image..."
-  cd backend
-  if docker build -t "$DOCKER_USERNAME/harness-demo:backend-latest" . && docker push "$DOCKER_USERNAME/harness-demo:backend-latest"; then
-    print_status "Backend image built and pushed: $DOCKER_USERNAME/harness-demo:backend-latest"
-  else
+  if ! build_and_push_image backend "$DOCKER_USERNAME/harness-demo:backend-latest"; then
     print_error "Backend image build/push failed"
     BUILD_FAILED=true
   fi
-  cd ..
 
-  # Build test image
   print_info "Building test image..."
-  cd python-tests
-  if docker build -t "$DOCKER_USERNAME/harness-demo:test-latest" . && docker push "$DOCKER_USERNAME/harness-demo:test-latest"; then
-    print_status "Test image built and pushed: $DOCKER_USERNAME/harness-demo:test-latest"
-  else
+  if ! build_and_push_image python-tests "$DOCKER_USERNAME/harness-demo:test-latest"; then
     print_error "Test image build/push failed (non-critical)"
   fi
-  cd ..
 
-  # Build docs image
   print_info "Building docs image..."
-  cd markdown
-  if docker build -t "$DOCKER_USERNAME/harness-demo:docs-latest" . && docker push "$DOCKER_USERNAME/harness-demo:docs-latest"; then
-    print_status "Docs image built and pushed: $DOCKER_USERNAME/harness-demo:docs-latest"
-  else
+  if ! build_and_push_image "$DOCS_BUILD_DIR" "$DOCKER_USERNAME/harness-demo:docs-latest"; then
     print_error "Docs image build/push failed (non-critical)"
-  fi
-  cd ..
-
-  # Restore original markdown files (undo personalization to keep git clean)
-  print_info "Restoring original documentation files..."
-  if command -v git &> /dev/null && git rev-parse --git-dir > /dev/null 2>&1; then
-    git checkout -- markdown/*.md 2>/dev/null || true
-  else
-    for mdfile in markdown/*.md; do
-      if [ -f "$mdfile" ]; then
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-          sed -i '.bak' "s/$DOCKER_USERNAME/dockerhubaccountid/g" "$mdfile"
-          rm -f "${mdfile}.bak"
-        else
-          sed -i "s/$DOCKER_USERNAME/dockerhubaccountid/g" "$mdfile"
-        fi
-      fi
-    done
   fi
 
   # Exit if backend build failed (critical)
@@ -1640,7 +1635,35 @@ except Exception:
   print_status "Project name: $PROJECT_NAME"
   print_info "Project identifier: $PROJECT_IDENTIFIER"
 
-  # Save configuration for future runs
+  ensure_participant_id
+
+  # Was the project created by someone else (an admin, or another participant)?
+  # Then cleanup must never delete it. Decided once, on the run that first imports it.
+  PROJECT_PREEXISTING=$(config_get "$CONFIG_FILE" PROJECT_PREEXISTING)
+  if [ "$REUSE_EXISTING_PROJECT" = true ] && ! grep -q '"harness_platform_project"' kit/terraform.tfstate 2>/dev/null; then
+    PROJECT_PREEXISTING=true
+  fi
+  PROJECT_PREEXISTING=${PROJECT_PREEXISTING:-false}
+
+  # Catch token/permission/collision problems now, not as a 403 halfway through Terraform
+  print_section "Pre-flight Checks"
+  if [ "$DEMO_SKIP_PREFLIGHT" = true ]; then
+    print_info "Skipping pre-flight checks (DEMO_SKIP_PREFLIGHT=true)"
+  else
+    if ! harness_preflight "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$REUSE_EXISTING_PROJECT"; then
+      print_error "Pre-flight checks failed - fix the problem above and rerun"
+      print_info "(To bypass: DEMO_SKIP_PREFLIGHT=true ./start-demo.sh)"
+      exit 1
+    fi
+    if [ "$REUSE_EXISTING_PROJECT" = true ] && \
+       ! participant_collision_check "$HARNESS_ACCOUNT_ID" "$HARNESS_ORG_ID" "$PROJECT_IDENTIFIER" "$PARTICIPANT_ID" kit/terraform.tfstate; then
+      print_info "Choose a unique participant ID: ./start-demo.sh --participant <id>"
+      exit 1
+    fi
+  fi
+
+  # Save configuration for future runs (keep settings chosen earlier in this run)
+  SAVED_COLIMA_MODE=$(config_get "$CONFIG_FILE" COLIMA_ARCH_MODE)
   {
     echo "DOCKER_USERNAME=$DOCKER_USERNAME"
     echo "HARNESS_ACCOUNT_ID=$HARNESS_ACCOUNT_ID"
@@ -1649,7 +1672,11 @@ except Exception:
     echo "DOCKER_PAT=$DOCKER_PAT"
     echo "PROJECT_NAME=$PROJECT_NAME"
     echo "PROJECT_IDENTIFIER=$PROJECT_IDENTIFIER"
+    echo "PROJECT_PREEXISTING=$PROJECT_PREEXISTING"
+    echo "PARTICIPANT_ID=$PARTICIPANT_ID"
+    [ -n "$SAVED_COLIMA_MODE" ] && echo "COLIMA_ARCH_MODE=$SAVED_COLIMA_MODE"
   } > "$CONFIG_FILE"
+  chmod 600 "$CONFIG_FILE"
   print_status "Saved credentials to $CONFIG_FILE for future runs"
   echo ""
 
@@ -1665,6 +1692,8 @@ project_name = "$PROJECT_NAME"
 project_identifier = "$PROJECT_IDENTIFIER"
 
 org_id = "$HARNESS_ORG_ID"
+
+participant_id = "$PARTICIPANT_ID"
 EOF
   print_status "Updated se-parms.tfvars with your configuration"
 
@@ -1893,35 +1922,59 @@ if [ "$K8S_TYPE" = "minikube" ]; then
   print_info "to access services at localhost:8080"
 fi
 
-# Deploy documentation to Kubernetes
-if [ "$SKIP_DOCKER_BUILD" = false ]; then
-  print_section "Deploying Documentation"
-
-  # Update docs deployment with Docker Hub username
-  print_info "Configuring documentation deployment..."
-  sed -i.bak "s/dockerhubaccountid/$DOCKER_USERNAME/g" harness-deploy/docs/docs-deployment.yaml
-  rm harness-deploy/docs/docs-deployment.yaml.bak 2>/dev/null
-
-  # Deploy docs to K8s
-  print_info "Deploying documentation to Kubernetes..."
-  if kubectl apply -f harness-deploy/docs/docs-deployment.yaml > /dev/null 2>&1; then
-    print_status "Documentation deployed successfully"
-    echo ""
-    echo "📚 Documentation available at:"
-    echo "   http://localhost:30001"
-    echo ""
+# Deploy documentation to Kubernetes (every run - the image may already exist from an earlier run)
+print_section "Deploying Documentation"
+DOCS_USER="${DOCKER_USERNAME:-$(config_get "$CONFIG_FILE" DOCKER_USERNAME)}"
+DOCS_OK=false
+if [ -z "$DOCS_USER" ]; then
+  print_info "Docker Hub username unknown - skipping docs deployment"
+else
+  print_info "Deploying $DOCS_USER/harness-demo:docs-latest..."
+  if deploy_docs "$SCRIPT_DIR" "$DOCS_USER"; then
+    DOCS_OK=true
+    print_status "Documentation available at http://localhost:30001"
+    if [ "$SKIP_DOCKER_BUILD" = true ]; then
+      print_info "(Using the docs image from an earlier build; rerun without --skip-docker-build to refresh names)"
+    fi
   else
-    print_error "Documentation deployment failed (non-critical)"
+    print_error "Documentation deployment didn't become ready (non-critical)"
+    print_info "If the docs image was never built, rerun without --skip-docker-build"
+    print_info "Check: kubectl get pods -l app=docs; kubectl describe deployment docs-deployment"
   fi
+fi
 
-  # Restore original docs deployment file (undo personalization to keep git clean)
-  print_info "Restoring original deployment file..."
-  if command -v git &> /dev/null && git rev-parse --git-dir > /dev/null 2>&1; then
-    git checkout -- harness-deploy/docs/docs-deployment.yaml 2>/dev/null || true
+# Install the Harness delegate (named to match the connectors Terraform created)
+DELEGATE_OK=false
+if [ "$SKIP_DELEGATE" = true ]; then
+  print_info "Skipping delegate installation (--skip-delegate)"
+else
+  print_section "Harness Delegate"
+  D_ACCOUNT="${HARNESS_ACCOUNT_ID:-$(config_get "$CONFIG_FILE" HARNESS_ACCOUNT_ID)}"
+  D_ORG="${HARNESS_ORG_ID:-$(config_get "$CONFIG_FILE" HARNESS_ORG_ID)}"
+  D_ORG="${D_ORG:-default}"
+  D_PROJECT="$(config_get "$CONFIG_FILE" PROJECT_IDENTIFIER)"
+  [ -z "$HARNESS_PAT" ] && HARNESS_PAT="${DEMO_BASE_PAT:-$(config_get "$CONFIG_FILE" HARNESS_PAT)}"
+  [ "$PARTICIPANT_RESOLVED" = true ] || PARTICIPANT_ID="$(config_get "$CONFIG_FILE" PARTICIPANT_ID)"
+  DELEGATE_NAME="$(delegate_name_for "$PARTICIPANT_ID")"
+
+  if [ -z "$D_ACCOUNT" ] || [ -z "$D_PROJECT" ] || [ -z "$HARNESS_PAT" ]; then
+    print_info "Harness settings not available yet - run without --skip-terraform first, then rerun"
+  elif delegate_connected "$D_ACCOUNT" "$D_ORG" "$D_PROJECT" "$DELEGATE_NAME"; then
+    DELEGATE_OK=true
+    print_status "Delegate '$DELEGATE_NAME' is already connected"
   else
-    # Fallback: manually restore using sed
-    sed -i.bak "s/$DOCKER_USERNAME/dockerhubaccountid/g" harness-deploy/docs/docs-deployment.yaml
-    rm harness-deploy/docs/docs-deployment.yaml.bak 2>/dev/null
+    echo "Your connectors use a delegate named '$DELEGATE_NAME'. It isn't connected yet."
+    read -p "Install it into this cluster now with Helm? [Y/n]: " INSTALL_DELEGATE
+    INSTALL_DELEGATE=${INSTALL_DELEGATE:-yes}
+    if [[ "$INSTALL_DELEGATE" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+      if install_delegate "$D_ACCOUNT" "$D_ORG" "$D_PROJECT" "$DELEGATE_NAME"; then
+        DELEGATE_OK=true
+      else
+        print_info "See Lab 0 'Installing the Delegate Manually' (name it exactly '$DELEGATE_NAME')"
+      fi
+    else
+      print_info "Install it later: rerun ./start-demo.sh --skip-docker-build --skip-terraform"
+    fi
   fi
 fi
 
@@ -1939,18 +1992,18 @@ elif [ -f "kit/terraform.tfstate" ] && [ -s "kit/terraform.tfstate" ]; then
   echo "✅ Harness resources are configured and ready!"
   echo ""
   echo "Next steps:"
-  echo "  1. Open the documentation in your browser:"
-  echo "     http://localhost:30001"
-  echo ""
-  echo "  2. Navigate to Harness UI: https://app.harness.io"
-  echo "  3. Select the '$PROJECT_NAME' project"
-  echo "  4. Configure Harness Code Repository:"
-  echo "     - Go to Code Repository module"
-  echo "     - Click 'partner_demo_kit' repository"
-  echo "     - Click 'Clone' > '+Generate Clone Credential'"
-  echo "     - Save the username and token"
-  echo "     - Enable Secret Scanning: Manage Repository > Security"
-  echo "  5. Follow the lab guides at http://localhost:30001"
+  if [ "$DOCS_OK" = true ]; then
+    echo "  1. Open the lab guides: http://localhost:30001"
+  else
+    echo "  1. Lab guides: rerun ./start-demo.sh (without --skip-docker-build) to build and deploy them"
+  fi
+  echo "  2. Open Harness: https://app.harness.io and select the '$PROJECT_NAME' project"
+  if [ "$DELEGATE_OK" = true ]; then
+    echo "  3. Delegate '$DELEGATE_NAME' is connected - start with Lab 0's verification steps"
+  else
+    echo "  3. Install the delegate (see Lab 0) - it must be named '$DELEGATE_NAME'"
+  fi
+  echo "  4. Follow the labs in order"
   echo ""
 else
   echo "Note: Harness resources were not configured (terraform.tfstate not found)"
