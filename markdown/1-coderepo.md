@@ -6,7 +6,7 @@
 This lab demonstrates Harness Code Repository's secret scanning feature, which prevents sensitive data (like API tokens, passwords, and keys) from being committed to your repository.
 
 ## Prerequisites
-- Terraform setup completed (creates "Base Demo" project and `partner_demo_kit{{ID}}` repository)
+- Terraform setup completed (creates "Base Demo" project and `partner_demo_kit` repository)
 - Harness account with Code Repository module enabled
 - Git client installed locally
 
@@ -23,7 +23,7 @@ This lab demonstrates Harness Code Repository's secret scanning feature, which p
 
 ## Step 2: Enable Secret Scanning
 
-1. In Harness UI, go to **Code Repository** and click into the `partner_demo_kit{{ID}}` repository
+1. In Harness UI, go to **Code Repository** and click into the `partner_demo_kit` repository
 2. On the left-side menu, click **Manage Repository**
 3. Click on the **Security** tab
 4. Toggle **"Secret Scanning"** to **ON**

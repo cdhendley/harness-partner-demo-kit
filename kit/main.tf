@@ -47,7 +47,7 @@ locals {
   name_sfx      = var.participant_id == "" ? "" : " ${var.participant_id}"
   delegate_name = var.delegate_name != "" ? var.delegate_name : (var.participant_id == "" ? "local-k8s-delegate" : "${var.participant_id}-k8s-delegate")
 
-  repo_id        = "partner_demo_kit${local.id_sfx}"
+  repo_id        = "partner_demo_kit"
   k8s_conn_id    = "workshop_k8s${local.id_sfx}"
   docker_conn_id = "workshopdocker${local.id_sfx}"
   prom_conn_id   = "prometheus${local.id_sfx}"

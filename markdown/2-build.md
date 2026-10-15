@@ -32,7 +32,7 @@ This lab walks through creating a complete CI pipeline with test intelligence, c
 3. Configure the build stage:
    - **Stage Name**: `Build`
    - **Clone Codebase**: Enable
-   - **Repository Name**: `partner_demo_kit{{ID}}` (the Harness Code repository created by Terraform)
+   - **Repository Name**: `partner_demo_kit` (the Harness Code repository created by Terraform)
    ![](images/2025-12-15_15-12-17.jpg)
 4. Click **Set Up Stage**
 

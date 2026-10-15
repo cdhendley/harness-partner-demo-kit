@@ -180,7 +180,7 @@ except Exception:
       print_info "Ask an org/project admin to make you Project Admin on '$project'"
     else
       print_error "You can't create projects in org '$org' (missing core_project_create)"
-      print_info "Ask an org admin to create the project for you, then enter its exact name here"
+      print_info "Ask an org admin to create the project and make you Project Admin on it, then rerun and pick it from the list"
     fi
   else
     print_status "Permissions OK"
@@ -517,13 +517,33 @@ repl = [
     ("{{DELEGATE}}", f"{participant}-k8s-delegate" if participant else "local-k8s-delegate"),
 ]
 if pname and pname != "Base Demo":
-    repl += [("Base Demo", pname), ("Base_Demo", pid_proj)]
+    repl += [("Base Demo", pname), ("Base_Demo", pid_proj), ("BASE DEMO", pname.upper())]
 for f in glob.glob(os.path.join(dest, "*.md")):
     s = open(f, encoding="utf-8").read()
     for a, b in repl:
         s = s.replace(a, b)
     open(f, "w", encoding="utf-8").write(s)
 PYEOF
+}
+
+# Prints why a Docker Hub access token can't be used, or nothing if Docker Hub accepts it for
+# USER. Harness's Docker connector and the cluster's pull secret need this real token; a Docker
+# Desktop/CLI session on the laptop is of no use to them.
+docker_hub_token_problem() {
+  local user="$1" token="$2" body code
+  if [ -z "$token" ]; then
+    echo "No token entered."
+    return
+  fi
+  body=$(DU="$user" DT="$token" python3 -c 'import json,os;print(json.dumps({"username":os.environ["DU"],"password":os.environ["DT"]}))')
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST https://hub.docker.com/v2/users/login \
+    -H 'Content-Type: application/json' -d "$body")
+  case "$code" in
+    200) ;;
+    000) echo "Couldn't reach hub.docker.com - check your network/VPN." ;;
+    401) echo "Docker Hub rejected it for user '$user' (wrong or expired token, or a token from a different Docker Hub account)." ;;
+    *)   echo "Docker Hub answered HTTP $code - try again in a moment." ;;
+  esac
 }
 
 # Deploy (or refresh) the docs site from DOCKER_USER/harness-demo:docs-latest.

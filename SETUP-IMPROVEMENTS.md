@@ -9,7 +9,7 @@ This builds on [PREEXISTING-PROJECT-SUPPORT.md](PREEXISTING-PROJECT-SUPPORT.md) 
 | Colima on Apple Silicon | Forced an x86_64 VM, which runs under **qemu software emulation** (slow, heavy, can crash) | **Native arm64** by default (Apple Virtualization.framework); amd64 emulation still selectable |
 | Image builds | `docker build` = whatever the VM's architecture is; Homebrew's docker CLI silently uses the deprecated legacy builder | **buildx**, multi-arch (`linux/amd64,linux/arm64`) under one tag |
 | Delegate | Copy a Helm command from the UI; the guide's rename doesn't reach the command; easy to stop after the repo lines | **Installed by the script** with the right name, token, endpoint and image; waits until connected |
-| Many people, one project | Fixed identifiers collide on the second `terraform apply`; same-named delegates share tasks across laptops | **Participant ID** suffixes every resource and the delegate; lab guides personalized per person |
+| Many people, one project | Fixed identifiers collide on the second `terraform apply`; same-named delegates share tasks across laptops | A per-person **name/ID** suffixes every resource and the delegate (the code repo is shared); lab guides personalized per person |
 | Token problems | Surface as a 403 midway through `terraform apply` | **Pre-flight checks** before Terraform with plain-language fixes |
 | Cleanup | `terraform destroy` deleted an imported (pre-existing/shared) project — for everyone | Never deletes a project it didn't create or that is shared |
 | Docs site | Only deployed when images were built; rebuilt image not picked up | Deployed every run; always pulls the moving `docs-latest` tag |
@@ -18,11 +18,11 @@ This builds on [PREEXISTING-PROJECT-SUPPORT.md](PREEXISTING-PROJECT-SUPPORT.md) 
 
 `colima start --vm-type=vz --vz-rosetta --arch x86_64` looks like it uses Apple's hypervisor with Rosetta, but on Apple Silicon an `x86_64` VM can't run on Virtualization.framework: Lima silently switches to **qemu** with software CPU emulation (`~/.colima/_lima/<profile>/lima.yaml` shows `vmType: qemu`, and a `qemu-system-x86_64 -accel tcg` process runs). `colima status` still reports Virtualization.framework. Everything — Kubernetes, the delegate, Docker builds — runs emulated. In testing, the guest kernel panicked during an image build (visible only in Lima's `serial.log`).
 
-Now `start-demo.sh` asks on every run, offering the previous answer (`COLIMA_ARCH_MODE`, default native) so returning users just press Enter:
+Now `start-demo.sh` always uses a native arm64 VM on Apple Silicon. The question was removed: it confused users who didn't know which answer applied to their Mac. Emulation remains available only through a flag:
 
 ```bash
-./start-demo.sh                      # prompts on Apple Silicon (default: native)
-./start-demo.sh --colima-arch amd64  # pre-answer the question
+./start-demo.sh                      # Apple Silicon: native arm64, no question
+./start-demo.sh --colima-arch amd64  # qemu-emulated amd64 VM (slow; only if you really need one)
 ```
 
 Native uses `--vm-type=vz --vz-rosetta --arch aarch64`. amd64-only images (for example a frontend built on Harness Cloud) still run, translated by Rosetta. qemu is only installed/required in amd64 mode.
@@ -52,15 +52,17 @@ The name is `local-k8s-delegate`, or `<participant>-k8s-delegate` (see below) �
 
 ## 4. Several people sharing one project
 
-Projects are cheap, but asking an admin for one per participant doesn't scale for a workshop. With a **participant ID** (1–20 lowercase letters/digits, e.g. `alex`; `--participant <id>` or prompted once), Terraform's new `participant_id` variable appends `_<id>` to every identifier and ` <id>` to every name the kit creates:
+Projects are cheap, but asking an admin for one per participant doesn't scale for a workshop. With a **name/ID** (1–20 lowercase letters/digits, e.g. `alex`; asked for on every run, `--participant <id>` pre-answers it), Terraform's new `participant_id` variable appends `_<id>` to every identifier and ` <id>` to every name the kit creates, except the code repository:
 
-`partner_demo_kit_alex`, `workshop_k8s_alex` ("Workshop K8s alex"), `workshopdocker_alex`, `prometheus_alex`, `docker_username_alex`, `DOCKER_PAT_alex`, `Compile_Application_alex`, `dev_alex`/`prod_alex`, `k8s_dev_alex`, `backend_alex`, `backend_dev_alex`/`backend_prod_alex`, and the delegate `alex-k8s-delegate`.
+`workshop_k8s_alex` ("Workshop K8s alex"), `workshopdocker_alex`, `prometheus_alex`, `docker_username_alex`, `DOCKER_PAT_alex`, `Compile_Application_alex`, `dev_alex`/`prod_alex`, `k8s_dev_alex`, `backend_alex`, `backend_dev_alex`/`backend_prod_alex`, and the delegate `alex-k8s-delegate`.
 
 Delegates are grouped by name within a scope, and Harness sends a task to any connected instance, so unique delegate names also keep each person's deployments on their own cluster.
 
 The lab guides use `{{ID}}`, `{{NAME}}` and `{{DELEGATE}}` tokens that the script fills in when it builds each person's docs image, so everyone reads their own names; pipelines, services and policies created during the labs are suffixed too. An empty participant ID produces exactly the original names (verified: `terraform plan` against an existing single-user state shows no changes).
 
-The script refuses to continue if this participant's connector already exists in the project but not in local state (someone else using the same ID, or a lost state).
+The script refuses a name/ID whose connector already exists in the project but not in local state (someone else using the same ID, or a lost state), and asks for another.
+
+The code repository `partner_demo_kit` is one per project and shared. If it already exists, `start-demo.sh` adopts it into Terraform state (`terraform import harness_platform_repo…`) instead of importing it from GitHub again. That matters because Harness's import of a public GitHub repo without credentials is throttled on Harness's side (its docs recommend "Requires Authorization" for reliable imports) and fails intermittently with "Access denied to … at github"; the apply retries that one error a few times, and a workshop lead can import the repo once per project in the UI so nobody hits it.
 
 ## 5. Pre-flight checks
 
@@ -101,13 +103,13 @@ When the kit reuses a project it didn't create, it records `PROJECT_PREEXISTING=
 
 ## Interactive by default
 
-Less experienced engineers forget switches and hand-edits, so every setting is asked for interactively, with the previous answer (from `.demo-config`) offered as the default: the Harness **organization** (a numbered list of the orgs the token can see — previously this could only be set by editing `.demo-config`), project, **participant ID** (type `none` to clear it), Colima mode, whether to **build images**, Terraform re-run, and delegate install. A participant-ID collision asks for a different ID instead of exiting. Flags and environment variables still exist, but only pre-answer questions.
+Less experienced engineers forget switches and hand-edits, so every setting is asked for interactively, with the previous answer (from `.demo-config`) offered as the default: the Harness **organization** and **project** (numbered lists — the project list shows only projects where the user has the permissions the kit needs, and "create a new project" only appears for users allowed to), the **name/ID** (type `none` to clear it), whether to **build images**, Terraform re-run, and delegate install. A name/ID collision asks for a different one instead of exiting. Tokens are checked when pasted: the Harness token locally for the `pat.` shape first (an API key pasted by mistake gets a specific message), then against Harness; the Docker Hub access token against Docker Hub. The script no longer substitutes a placeholder for the Docker Hub token when Docker Desktop is already logged in — Harness's Docker connector needs the real token, so it is always asked for once. Flags and environment variables still exist, but only pre-answer questions.
 
 ## New flags and settings
 
 | Flag / variable | Purpose |
 |---|---|
-| `--colima-arch native\|amd64` | Apple Silicon VM mode (saved as `COLIMA_ARCH_MODE`) |
+| `--colima-arch native\|amd64` | Apple Silicon VM mode; without it, native (no prompt) |
 | `--org <identifier>` | Harness organization (saved as `HARNESS_ORG_ID`) |
 | `--participant <id>` | Share a project (saved as `PARTICIPANT_ID`) |
 | `--skip-delegate` | Don't install the delegate |

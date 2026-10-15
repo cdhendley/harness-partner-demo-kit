@@ -40,7 +40,7 @@ On the **Service** tab:
 3. **Manifest Source**: `Harness Code` (Code Repository)
 4. **Manifest Details**:
    - **Manifest Identifier**: `templates`
-   - **Repository Name**: `partner_demo_kit{{ID}}`
+   - **Repository Name**: `partner_demo_kit`
    - **Branch**: `main`
    - **File/Folder Path**: `harness-deploy/frontend/manifests`
    - **Values.yaml**: Click **+ Add File**

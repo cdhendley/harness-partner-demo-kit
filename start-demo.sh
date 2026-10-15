@@ -76,6 +76,7 @@ SKIP_DOCKER_BUILD_FLAG=false
 CONFIG_FILE=".demo-config"
 PROJECT_NAME=""
 PROJECT_IDENTIFIER=""
+REPO_IDENTIFIER="partner_demo_kit"   # must match local.repo_id in kit/main.tf
 IAC_CMD=""  # Will be set to 'terraform' or 'tofu' (OpenTofu)
 
 # Load project name from config if available (for display purposes)
@@ -362,6 +363,58 @@ ensure_valid_harness_pat() {
 
   print_error "The token from ${source_label} can't be used: $problem"
   prompt_for_harness_pat
+}
+
+# Docker Hub access token. Harness's Docker connector and the cluster's pull secret need the
+# real token: a Docker Desktop/CLI session on this laptop is of no use to them. Checked with
+# Docker Hub before it is accepted, then saved for later runs.
+prompt_for_docker_token() {
+  local problem
+  while [ -z "$DOCKER_USERNAME" ]; do
+    read -r -p "Docker Hub username: " DOCKER_USERNAME
+    DOCKER_USERNAME=$(printf '%s' "$DOCKER_USERNAME" | tr -d '[:space:]')
+  done
+  echo ""
+  echo "Docker Hub access token for '$DOCKER_USERNAME'. Harness needs it too - being logged in to"
+  echo "Docker on this computer is not enough. Create one at https://hub.docker.com/settings/security"
+  echo "(Personal access tokens > Generate new token, with Read & Write access)."
+  while true; do
+    read -r -s -p "Docker Hub access token (not shown as you type): " DOCKER_LOGIN_PASSWORD
+    echo ""
+    DOCKER_LOGIN_PASSWORD=$(printf '%s' "$DOCKER_LOGIN_PASSWORD" | tr -d '[:space:]')
+    print_info "Checking the token with Docker Hub..."
+    problem=$(docker_hub_token_problem "$DOCKER_USERNAME" "$DOCKER_LOGIN_PASSWORD")
+    if [ -z "$problem" ]; then
+      print_status "Docker Hub token OK"
+      config_set "$CONFIG_FILE" DOCKER_USERNAME "$DOCKER_USERNAME"
+      config_set "$CONFIG_FILE" DOCKER_PAT "$DOCKER_LOGIN_PASSWORD"
+      return 0
+    fi
+    print_error "$problem"
+  done
+}
+
+# Create/refresh the 'dockerhub-pull' image pull secret in both namespaces the demo uses and
+# attach it to their default service accounts, so image pulls use the token instead of the
+# anonymous Docker Hub rate limit. Only ever called with a token Docker Hub has accepted: a
+# secret with a bad token makes every image pull fail, which is worse than no secret.
+ensure_docker_pull_secret() {
+  local user="$1" token="$2" ns i
+  for ns in default harness-delegate-ng; do
+    kubectl get namespace "$ns" > /dev/null 2>&1 || kubectl create namespace "$ns" > /dev/null 2>&1 || true
+    i=0
+    until kubectl get serviceaccount default -n "$ns" > /dev/null 2>&1 || [ "$i" -ge 10 ]; do sleep 1; i=$((i + 1)); done
+    if kubectl create secret docker-registry dockerhub-pull \
+         --docker-server=https://index.docker.io/v1/ \
+         --docker-username="$user" --docker-password="$token" \
+         --docker-email="${user}@example.com" -n "$ns" --dry-run=client -o yaml 2>/dev/null \
+       | kubectl apply -f - > /dev/null 2>&1 \
+       && kubectl patch serviceaccount default -n "$ns" -p '{"imagePullSecrets": [{"name": "dockerhub-pull"}]}' > /dev/null 2>&1; then
+      print_status "Docker Hub pull secret ready in namespace '$ns'"
+    else
+      print_error "Could not create the Docker Hub pull secret in namespace '$ns'"
+    fi
+  done
 }
 
 # Check Kubernetes cluster resources (CPU and memory)
@@ -968,58 +1021,13 @@ if [ -f "$CONFIG_FILE" ]; then
   DOCKER_PAT=$(grep "DOCKER_PAT=" "$CONFIG_FILE" | cut -d'=' -f2)
 fi
 
-# Check if we have credentials
-if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PAT" ] && [ "$DOCKER_PAT" != "logged-in-via-docker-desktop" ]; then
-  print_info "Creating Docker Hub pull secret with saved credentials..."
-
-  # Create secret in default namespace
-  if kubectl get secret dockerhub-pull -n default &> /dev/null; then
-    print_info "Updating existing Docker Hub secret in default namespace..."
-    kubectl delete secret dockerhub-pull -n default &> /dev/null
-  fi
-
-  kubectl create secret docker-registry dockerhub-pull \
-    --docker-server=https://index.docker.io/v1/ \
-    --docker-username="$DOCKER_USERNAME" \
-    --docker-password="$DOCKER_PAT" \
-    --docker-email="${DOCKER_USERNAME}@example.com" \
-    -n default &> /dev/null
-
-  if [ $? -eq 0 ]; then
-    print_status "Docker Hub secret created in default namespace"
-  else
-    print_error "Failed to create Docker Hub secret in default namespace"
-  fi
-
-  # Create secret in harness-delegate-ng namespace
-  if kubectl get secret dockerhub-pull -n harness-delegate-ng &> /dev/null; then
-    print_info "Updating existing Docker Hub secret in harness-delegate-ng namespace..."
-    kubectl delete secret dockerhub-pull -n harness-delegate-ng &> /dev/null
-  fi
-
-  kubectl create secret docker-registry dockerhub-pull \
-    --docker-server=https://index.docker.io/v1/ \
-    --docker-username="$DOCKER_USERNAME" \
-    --docker-password="$DOCKER_PAT" \
-    --docker-email="${DOCKER_USERNAME}@example.com" \
-    -n harness-delegate-ng &> /dev/null
-
-  if [ $? -eq 0 ]; then
-    print_status "Docker Hub secret created in harness-delegate-ng namespace"
-
-    # Attach secret to default service account
-    kubectl patch serviceaccount default -n harness-delegate-ng -p '{"imagePullSecrets": [{"name": "dockerhub-pull"}]}' &> /dev/null
-    print_status "Attached secret to default service account in harness-delegate-ng"
-  else
-    print_error "Failed to create Docker Hub secret in harness-delegate-ng namespace"
-  fi
-
-  # Attach secret to default service account in default namespace
-  kubectl patch serviceaccount default -n default -p '{"imagePullSecrets": [{"name": "dockerhub-pull"}]}' &> /dev/null
-  print_status "Attached secret to default service account in default namespace"
+# Only with a saved token that Docker Hub still accepts (checked); otherwise the secret is
+# created later, as soon as a token has been verified
+if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PAT" ] && [ -z "$(docker_hub_token_problem "$DOCKER_USERNAME" "$DOCKER_PAT")" ]; then
+  print_info "Creating the Docker Hub pull secret with the saved token..."
+  ensure_docker_pull_secret "$DOCKER_USERNAME" "$DOCKER_PAT"
 else
-  print_info "Docker credentials not available yet, skipping secret creation"
-  print_info "The secret will be created after Docker authentication"
+  print_info "No verified Docker Hub token saved yet - the pull secret is created once there is one"
 fi
 
 # Deploy Prometheus (non-blocking - runs in background)
@@ -1151,46 +1159,23 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
     done
   fi
 
-  # Load cached password/PAT
-  if [ -f "$CONFIG_FILE" ]; then
-    DOCKER_LOGIN_PASSWORD=$(grep "DOCKER_PAT=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
-  fi
-
-  if [ -z "$DOCKER_LOGIN_PASSWORD" ] && [ -f "kit/se-parms.tfvars" ]; then
-    DOCKER_LOGIN_PASSWORD=$(grep DOCKER_PAT kit/se-parms.tfvars | cut -d'"' -f2 2>/dev/null || echo "")
-  fi
-
-  if [ "$DOCKER_LOGIN_PASSWORD" = "logged-in-via-docker-desktop" ]; then
-    DOCKER_LOGIN_PASSWORD=""
-  fi
-
-  NEED_DOCKER_LOGIN=false
-
-  # If we have cached credentials, ALWAYS use them to login
-  # This ensures we have a fresh auth token even if docker info shows a logged-in user
+  # Docker Hub access token: the saved one is checked again with Docker Hub; otherwise it is
+  # asked for. Always log in with it, so the push uses the same credential Harness gets.
+  DOCKER_LOGIN_PASSWORD=$(config_get "$CONFIG_FILE" DOCKER_PAT)
   if [ -n "$DOCKER_LOGIN_PASSWORD" ]; then
-    print_status "Using cached Docker Hub credentials"
-    NEED_DOCKER_LOGIN=true
-  elif [ -n "$LOGGED_IN_USER" ] && [ "$LOGGED_IN_USER" = "$DOCKER_USERNAME" ]; then
-    # Only trust existing session if we don't have cached credentials
-    print_status "Using existing Docker Hub session for: $LOGGED_IN_USER"
-    print_info "Note: If push fails, you may need to re-authenticate"
-  else
-    echo ""
-    print_info "You need to provide your Docker Hub password or Personal Access Token (PAT)"
-    print_info "To create a PAT: https://hub.docker.com/settings/security"
-    echo ""
-    read -sp "Enter your Docker Hub password/PAT: " DOCKER_LOGIN_PASSWORD
-    echo ""
-
-    # Validate that password is not empty
-    while [ -z "$DOCKER_LOGIN_PASSWORD" ]; do
-      print_error "Password/PAT cannot be empty"
-      read -sp "Enter your Docker Hub password/PAT: " DOCKER_LOGIN_PASSWORD
-      echo ""
-    done
-    NEED_DOCKER_LOGIN=true
+    print_info "Checking the saved Docker Hub token..."
+    DOCKER_TOKEN_PROBLEM=$(docker_hub_token_problem "$DOCKER_USERNAME" "$DOCKER_LOGIN_PASSWORD")
+    if [ -n "$DOCKER_TOKEN_PROBLEM" ]; then
+      print_error "The saved Docker Hub token can't be used: $DOCKER_TOKEN_PROBLEM"
+      DOCKER_LOGIN_PASSWORD=""
+    else
+      print_status "Docker Hub token OK"
+    fi
   fi
+  if [ -z "$DOCKER_LOGIN_PASSWORD" ]; then
+    prompt_for_docker_token
+  fi
+  NEED_DOCKER_LOGIN=true
 
   if [ "$NEED_DOCKER_LOGIN" = true ]; then
     echo ""
@@ -1200,12 +1185,9 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
       print_info "Logging in to Docker Hub as $DOCKER_USERNAME..."
     fi
 
-    # Verify we have a password to use
+    # Safety net: should already be set and verified above
     if [ -z "$DOCKER_LOGIN_PASSWORD" ]; then
-      print_error "Docker password is empty - cannot log in"
-      echo ""
-      read -sp "Enter your Docker Hub password/PAT: " DOCKER_LOGIN_PASSWORD
-      echo ""
+      prompt_for_docker_token
     fi
 
     # Attempt Docker login
@@ -1277,7 +1259,7 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
           echo ""
           echo "$LOGIN_OUTPUT"
           echo ""
-          print_info "Please verify your Docker Hub username and password/PAT"
+          print_info "Please verify your Docker Hub username and access token"
           print_info "Delete .demo-config and re-run to enter new credentials"
         else
           print_error "Docker login failed: $LOGIN_OUTPUT"
@@ -1356,56 +1338,9 @@ if [ "$SKIP_DOCKER_BUILD" = false ]; then
     exit 1
   fi
 
-  # Now create/update Docker Hub secret with authenticated credentials
+  # Pull secret with the verified token
   print_section "Updating Docker Hub Secret for Image Pulls"
-
-  if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_LOGIN_PASSWORD" ]; then
-    print_info "Creating/updating Docker Hub pull secret with authenticated credentials..."
-
-    # Create secret in default namespace
-    if kubectl get secret dockerhub-pull -n default &> /dev/null; then
-      kubectl delete secret dockerhub-pull -n default &> /dev/null
-    fi
-
-    kubectl create secret docker-registry dockerhub-pull \
-      --docker-server=https://index.docker.io/v1/ \
-      --docker-username="$DOCKER_USERNAME" \
-      --docker-password="$DOCKER_LOGIN_PASSWORD" \
-      --docker-email="${DOCKER_USERNAME}@example.com" \
-      -n default &> /dev/null
-
-    if [ $? -eq 0 ]; then
-      print_status "Docker Hub secret created/updated in default namespace"
-    else
-      print_error "Failed to create Docker Hub secret in default namespace"
-    fi
-
-    # Create secret in harness-delegate-ng namespace
-    if kubectl get secret dockerhub-pull -n harness-delegate-ng &> /dev/null; then
-      kubectl delete secret dockerhub-pull -n harness-delegate-ng &> /dev/null
-    fi
-
-    kubectl create secret docker-registry dockerhub-pull \
-      --docker-server=https://index.docker.io/v1/ \
-      --docker-username="$DOCKER_USERNAME" \
-      --docker-password="$DOCKER_LOGIN_PASSWORD" \
-      --docker-email="${DOCKER_USERNAME}@example.com" \
-      -n harness-delegate-ng &> /dev/null
-
-    if [ $? -eq 0 ]; then
-      print_status "Docker Hub secret created/updated in harness-delegate-ng namespace"
-
-      # Attach secret to default service account
-      kubectl patch serviceaccount default -n harness-delegate-ng -p '{"imagePullSecrets": [{"name": "dockerhub-pull"}]}' &> /dev/null
-      print_status "Attached secret to service account in harness-delegate-ng"
-    else
-      print_error "Failed to create Docker Hub secret in harness-delegate-ng namespace"
-    fi
-
-    # Attach secret to default service account in default namespace
-    kubectl patch serviceaccount default -n default -p '{"imagePullSecrets": [{"name": "dockerhub-pull"}]}' &> /dev/null
-    print_status "Attached secret to service account in default namespace"
-  fi
+  ensure_docker_pull_secret "$DOCKER_USERNAME" "$DOCKER_LOGIN_PASSWORD"
 else
   print_info "Skipping Docker image build (existing images on Docker Hub will be used)"
 fi
@@ -1454,38 +1389,20 @@ if [ "$SKIP_TERRAFORM" = false ]; then
   # Account, token, org and project were collected in "Harness Settings" (collect_harness_settings)
   DOCKER_PAT=""
 
-  # Get Docker password/PAT
-  # Try to get from config file first
-  if [ -f "$CONFIG_FILE" ]; then
-    DOCKER_PAT=$(grep "DOCKER_PAT=" "$CONFIG_FILE" | cut -d'=' -f2)
-  fi
-
-  # If still not found, use a placeholder (should have been saved during Docker build section)
-  if [ -z "$DOCKER_PAT" ]; then
-    # Check if we're logged in to Docker Hub (might have been logged in via Docker Desktop on first run)
-    LOGGED_IN_USER=$(docker info 2>/dev/null | grep "Username:" | awk '{print $2}')
-    if [ -n "$LOGGED_IN_USER" ]; then
-      print_status "Using Docker Hub session (logged in via Docker Desktop)"
-      DOCKER_PAT="logged-in-via-docker-desktop"
-    else
-      # This shouldn't happen if the Docker build section ran, but handle it anyway
-      print_info "Docker Hub password not found in cache"
-      echo ""
-      echo "Enter your Docker Hub password or Personal Access Token (PAT)"
-      echo "To create a PAT: https://hub.docker.com/settings/security"
-      echo ""
-      read -sp "Docker Hub password/PAT: " DOCKER_PAT
-      echo ""
-
-      while [ -z "$DOCKER_PAT" ]; do
-        print_error "Password/PAT cannot be empty"
-        read -sp "Docker Hub password/PAT: " DOCKER_PAT
-        echo ""
-      done
-    fi
+  # Docker Hub access token for the Harness Docker connector: saved (and checked) by the image
+  # build step; asked for here only if that step was skipped and nothing is saved yet
+  DOCKER_PAT=$(config_get "$CONFIG_FILE" DOCKER_PAT)
+  if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PAT" ] && [ -z "$(docker_hub_token_problem "$DOCKER_USERNAME" "$DOCKER_PAT")" ]; then
+    print_status "Using the saved Docker Hub token for Terraform"
   else
-    print_status "Using cached Docker Hub password/PAT for Terraform"
+    if [ -n "$DOCKER_PAT" ]; then
+      print_error "The saved Docker Hub token is not accepted by Docker Hub - a new one is needed"
+    fi
+    DOCKER_PAT=""
+    prompt_for_docker_token
+    DOCKER_PAT="$DOCKER_LOGIN_PASSWORD"
   fi
+  ensure_docker_pull_secret "$DOCKER_USERNAME" "$DOCKER_PAT"
 
   # Get Harness Project Name (may already be set from Docker build section)
   # Only reset if not already set
@@ -1823,6 +1740,23 @@ EOF
       fi
     fi
 
+    # Reuse the demo code repository if it already exists in the project (left from an earlier
+    # run, or imported by hand in the Harness UI with "Requires Authorization"). Once it is in
+    # state the provider only updates it and never asks Harness to fetch it from GitHub again -
+    # Harness's anonymous GitHub import fails intermittently ("Access denied ... at github").
+    if ! $IAC_CMD state list 2>/dev/null | grep -q '^harness_platform_repo.partner_demo_kit$' && \
+       [ "$(harness_get_code "/gateway/code/api/v1/repos/${HARNESS_ACCOUNT_ID}/${HARNESS_ORG_ID}/${PROJECT_IDENTIFIER}/${REPO_IDENTIFIER}/+/?accountIdentifier=${HARNESS_ACCOUNT_ID}")" = "200" ]; then
+      print_info "Code repository '$REPO_IDENTIFIER' already exists in project '$PROJECT_IDENTIFIER' - reusing it"
+      if $IAC_CMD import -var="pat=$HARNESS_PAT" -var-file="se-parms.tfvars" harness_platform_repo.partner_demo_kit "${HARNESS_ORG_ID}/${PROJECT_IDENTIFIER}/${REPO_IDENTIFIER}" > "$TEMP_DIR/terraform_import.log" 2>&1; then
+        print_status "Repository added to $IAC_CMD state"
+      else
+        print_error "$IAC_CMD import of the repository failed"
+        tail -10 "$TEMP_DIR/terraform_import.log" 2>/dev/null
+        cd ..
+        exit 1
+      fi
+    fi
+
     # Plan
     print_info "Running $IAC_CMD plan..."
     (
@@ -1873,7 +1807,12 @@ EOF
     else
       print_error "$IAC_CMD apply failed"
       if grep -q "Access denied to .* at github" "$APPLY_LOG"; then
-        print_info "Harness couldn't import the demo repo from GitHub after $APPLY_MAX tries. This is on Harness's side; run ./start-demo.sh again later."
+        print_info "Harness couldn't import the demo repo from GitHub after $APPLY_MAX tries (this happens on Harness's side)."
+        echo ""
+        echo "  Workaround: import it yourself in the Harness UI, then rerun this script - it will reuse the repository:"
+        echo "    project '$PROJECT_NAME' > Code Repository > dropdown next to 'New Repository' > Import Repository"
+        echo "    Repository: harness-community/partner-demo-kit    Name: $REPO_IDENTIFIER"
+        echo "    Tick 'Requires Authorization' and enter a GitHub token (needed only for this one import)"
       fi
       cd ..
       exit 1

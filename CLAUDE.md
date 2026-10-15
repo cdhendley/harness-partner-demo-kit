@@ -135,7 +135,7 @@ chmod +x start-demo.sh stop-demo.sh
 ./start-demo.sh --skip-terraform      # Skip Harness resource creation
 ./start-demo.sh --skip-delegate       # Skip the automatic Harness delegate install
 ./start-demo.sh --org <identifier>    # Harness organization (otherwise chosen from a prompted list)
-./start-demo.sh --participant <id>    # Participant ID for a shared Harness project
+./start-demo.sh --participant <id>    # Name/ID (participant ID) for a shared Harness project
 ./start-demo.sh --colima-arch native|amd64   # Apple Silicon Colima VM architecture (default: native)
 ```
 
@@ -146,7 +146,7 @@ Shared helpers live in [scripts/demo-lib.sh](scripts/demo-lib.sh) (bash 3.2 comp
 **What start-demo.sh automates:**
 1. **Detects platform** (macOS/Windows/Linux) and architecture (ARM64/AMD64)
 2. **Validates Kubernetes tool** based on platform:
-   - Apple Silicon Macs: Requires Colima; prompts for native arm64 (default) or amd64 emulation, remembered as `COLIMA_ARCH_MODE` in `.demo-config`
+   - Apple Silicon Macs: Requires Colima; always a native arm64 VM (no question asked; `--colima-arch amd64` is the only way to get qemu emulation)
    - Windows: Recommends minikube (allows Docker Desktop/Rancher Desktop)
    - Other platforms: Flexible (minikube, Colima, Docker Desktop, Rancher Desktop)
 3. Checks prerequisites (Docker, docker buildx, kubectl, helm, Terraform/OpenTofu)
@@ -159,15 +159,15 @@ Shared helpers live in [scripts/demo-lib.sh](scripts/demo-lib.sh) (bash 3.2 comp
 10. **Builds Docker images in parallel** (backend, test, docs) with buildx for linux/amd64 + linux/arm64, with progress tracking
 11. **Starts Terraform/OpenTofu init early** (runs in background while collecting credentials)
 12. **Updates Docker Hub secret** with authenticated credentials after login
-13. **Collects Harness credentials** (Account ID, PAT, Docker password) and participant ID
+13. **Collects Harness settings up front** (account ID, API token, org and project from numbered lists, name/ID) and a Docker Hub access token; every token is checked against its API when pasted (local `pat.` shape check first). The project list shows only projects where the user has the permissions the kit needs; "create a new project" is offered only to users who may create projects
 14. **Updates kit/se-parms.tfvars** automatically
-15. **Runs pre-flight checks**: token shape `pat.<account>.<id>.<secret>`, token account matches `HARNESS_ACCOUNT_ID`, org exists, permissions (project-create for a new project; project-scoped edit for an existing one), participant-ID collision. Bypass: `DEMO_SKIP_PREFLIGHT=true`
+15. **Runs pre-flight checks**: token shape `pat.<account>.<id>.<secret>`, token account matches `HARNESS_ACCOUNT_ID`, org exists, permissions (project-create for a new project; project-scoped edit for an existing one), name/ID collision. Bypass: `DEMO_SKIP_PREFLIGHT=true`
 16. **Runs Terraform/OpenTofu** (plan, apply with spinners) to create all Harness resources (an existing project is imported, never recreated)
 17. Saves configuration to `.demo-config` for subsequent runs
 18. Deploys documentation to Kubernetes at http://localhost:30001 on every run (`imagePullPolicy: Always` + rollout restart picks up a rebuilt `docs-latest`)
 19. **Installs the Harness delegate** with Helm at project scope: fetches the project `default_token`, manager endpoint and latest delegate image from the Harness API, names it `local-k8s-delegate` (or `<participant>-k8s-delegate`) to match the connectors, and waits until it's connected. Manual fallback: Lab 0
 
-**Shared project / participant ID**: Several people can share one Harness project. Each picks an ID (1-20 lowercase letters/digits, starting with a letter; saved as `PARTICIPANT_ID`). Terraform appends `_<id>` to identifiers and ` <id>` to names of everything the kit creates (repo `partner_demo_kit_<id>`, connectors `workshop_k8s_<id>`/`workshopdocker_<id>`/`prometheus_<id>`, environments, infra, backend service, template, monitored services); the delegate becomes `<id>-k8s-delegate` and lab guides are personalized. Empty ID = original single-user names.
+**Shared project / name/ID**: Several people can share one Harness project. Each types a name/ID (1-20 lowercase letters/digits, starting with a letter; saved as `PARTICIPANT_ID`, Terraform variable `participant_id`). Terraform appends `_<id>` to identifiers and ` <id>` to names of everything the kit creates (connectors `workshop_k8s_<id>`/`workshopdocker_<id>`/`prometheus_<id>`, environments, infra, backend service, template, monitored services); the delegate becomes `<id>-k8s-delegate` and lab guides are personalized. The code repository is **not** suffixed: one `partner_demo_kit` per project, shared. If it already exists (imported by a lead, or left by an earlier run) start-demo.sh adopts it with `terraform import` instead of importing from GitHub again (Harness's anonymous GitHub import is throttled and fails intermittently with "Access denied … at github"; the apply is retried a few times for that one error). stop-demo.sh keeps the repo in a shared project. Empty ID = original single-user names.
 
 **Performance Optimizations:**
 - Parallel Docker builds save 2-4 minutes vs sequential builds
@@ -360,7 +360,7 @@ Throughout the codebase, replace the placeholder `dockerhubaccountid` with your 
 Configure [kit/se-parms.tfvars](kit/se-parms.tfvars) with:
 - `account_id`: Your Harness account ID (found in URL when viewing your profile)
 - `docker_username`: Docker Hub username
-- `DOCKER_PAT`: Docker Hub password/PAT
+- `DOCKER_PAT`: Docker Hub access token (checked against Docker Hub when pasted; a Docker Desktop login is not enough, Harness's Docker connector and the cluster pull secret get this token)
 - `project_name`: Display name for your Harness project (default: "Base Demo")
 - `project_identifier`: Identifier for your project (alphanumeric + underscores, default: "Base_Demo")
 
@@ -472,18 +472,18 @@ This repository was originally created for Instruqt-based workshops. Key differe
 - **Removed**: Instruqt variable references like `<+variable.sandbox_id>` → Simplified for local use
 - **Added**: Platform-specific Kubernetes requirements (Colima for Apple Silicon, minikube for Windows)
 - **Added**: OS and architecture detection in start-demo.sh
-- **Changed**: Apple Silicon Colima runs native arm64 by default (`--colima-arch native|amd64`; choice saved as `COLIMA_ARCH_MODE`); architecture verified from the Docker daemon
+- **Changed**: Apple Silicon Colima always runs native arm64 (no prompt; `--colima-arch amd64` only); architecture verified from the Docker daemon
 - **Added**: Instructions for Mac/Linux PAT export
 - **Added**: ngrok option for exposing Prometheus
 - **Added**: Git credential setup for Harness Code Repository
 - **Added**: Colima as primary option for macOS (especially Apple Silicon)
 - **Added**: Rancher Desktop and Docker Desktop as alternatives
 - **Clarified**: All resources go into a dedicated demo project for proper segregation
-- **Added**: Customizable project name (prompted during start-demo.sh, with reserved word validation and existence check)
+- **Changed**: The Harness project is chosen from a numbered list of projects the user can administer (no free-text name); a new project can only be created by users with that permission
 - **Added**: OpenTofu support as alternative to Terraform (scripts auto-detect and prompt if both are installed)
 - **Added**: Multi-arch (amd64 + arm64) image builds with docker buildx
 - **Added**: Automatic project-scoped Harness delegate install via Helm (`--skip-delegate` to skip)
-- **Added**: Participant IDs for sharing one Harness project (`--participant <id>`); existing projects are imported, not recreated
+- **Added**: Name/IDs (participant IDs) for sharing one Harness project (`--participant <id>`); existing projects and an existing `partner_demo_kit` repo are imported into state, not recreated
 - **Added**: Pre-flight checks before Terraform (token, account, org, permissions, participant collision; `DEMO_SKIP_PREFLIGHT=true` to bypass)
 - **Changed**: stop-demo.sh never deletes a pre-existing or shared project; uses `HARNESS_ORG_ID`
 - **Changed**: Docs site deploys on every run and picks up rebuilt `docs-latest`

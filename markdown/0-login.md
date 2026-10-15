@@ -67,13 +67,12 @@ chmod +x start-demo.sh
 ```
 
 The script will prompt you for:
-- Harness Account ID
-- Harness API token (`pat.*` from **+ Token** under your API key)
-- Docker Hub username and password
-- Your Harness project name (an existing project is reused — enter its exact display name)
-- A **participant ID** — only needed when several people share one Harness project (see below)
+- Harness Account ID and Harness API token (`pat.*` from **+ Token** under your API key)
+- Harness organization and project — chosen from numbered lists of the ones you can use
+- Your **name/ID** (see below)
+- Docker Hub username and access token
 
-> **Sharing one project with other people?** Each person picks a short participant ID (lowercase letters/digits, e.g. `alex`). Everything the kit creates gets that ID appended — connectors, environments, the backend service, the code repository, and your delegate (`alex-k8s-delegate`) — so nobody collides. These lab guides are personalized with *your* names automatically. If you are the only person using the project, leave the participant ID empty.
+> **Your name/ID.** Everyone shares one Harness project, so the script asks for a short name/ID — just your name, e.g. `alex` (lowercase letters/digits, starting with a letter, max 20). Everything the kit creates for you gets it appended — connectors, environments, the backend service and your delegate (`alex-k8s-delegate`) — so your resources don't clash with anyone else's. These lab guides are personalized with *your* names automatically. Type `none` only if nobody else uses the project.
 
 > **Important**: Creating an API key is not enough — you must click **+ Token** on the key and copy the token value. If you only see an API key with no tokens listed under it, setup and cleanup will fail with authentication errors.
 
@@ -139,7 +138,7 @@ Navigate to the **"Base Demo"** project and verify:
 **Code Repository:**
 - Using the module selection button ![](images/2026-01-07_10-33-10.jpg)
 - Choose the **Code Repository** module
-- Verify `partner_demo_kit{{ID}}` repository exists
+- Verify `partner_demo_kit` repository exists
 
 **Continuous Delivery & Git Ops**
 - Next, using the module selection button again, choose the **Continuous Delivery & Git Ops** module
@@ -328,7 +327,7 @@ Now that you've completed the setup and installed the delegate, you're ready to 
 
 **Throughout the Demo:**
 - All activities take place in the **"Base Demo"** project
-- The `partner_demo_kit{{ID}}` repository in Harness Code Repository is mirrored from GitHub
+- The `partner_demo_kit` repository in Harness Code Repository is mirrored from GitHub
 - You'll generate Git credentials for the Harness Code Repository in Lab 1
 - Your local Kubernetes cluster and Prometheus must remain running
 

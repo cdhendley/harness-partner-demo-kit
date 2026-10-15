@@ -50,7 +50,7 @@ On the **Service** tab:
 > The backend service was **pre-configured by Terraform** to demonstrate how platform teams can create reusable service templates. This service includes:
 >
 > **Kubernetes Manifests** (from Harness Code Repository):
-> - **Repository**: `partner_demo_kit{{ID}}`
+> - **Repository**: `partner_demo_kit`
 > - **Manifest Path**: `harness-deploy/backend/manifests/`
 > - **Values File**: `harness-deploy/backend/values.yaml`
 > - These manifests define the backend deployment, service, and configuration

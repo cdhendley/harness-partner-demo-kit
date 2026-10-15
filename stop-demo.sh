@@ -920,6 +920,17 @@ if [ "$DELETE_HARNESS_PROJECT" = true ]; then
                 TERRAFORM_SUCCESS=true
               fi
             fi
+            # The code repository is one per project (no per-person suffix): in a shared project
+            # it belongs to everyone, so keep it too
+            if [ "$SKIP_TERRAFORM" = false ] && [ "$SHARED_PROJECT" = true ] && \
+               $IAC_CMD state list 2>/dev/null | grep -q '^harness_platform_repo.partner_demo_kit$'; then
+              print_info "Code repository is shared: removing it from $IAC_CMD state so destroy leaves it alone"
+              if ! $IAC_CMD state rm harness_platform_repo.partner_demo_kit > /dev/null; then
+                print_error "Could not remove the repository from state - aborting destroy to protect it"
+                SKIP_TERRAFORM=true
+                TERRAFORM_SUCCESS=true
+              fi
+            fi
 
             if [ "$SKIP_TERRAFORM" = false ]; then
               print_info "Running $IAC_CMD destroy (this may take 2-3 minutes)..."
