@@ -8,6 +8,27 @@ If several people are sharing one Harness project (a workshop), the **workshop l
 
 ---
 
+## ⚠️ Shared project? Read this before running `stop-demo.sh`
+
+**Older copies of this kit delete the entire Harness project when you run `stop-demo.sh`'s Harness cleanup — everyone's resources, pipelines and work, not just yours.** In a shared workshop project that means wiping out every other participant.
+
+The current version is safe:
+
+| `stop-demo.sh` choice | What it touches |
+|---|---|
+| Options **1–3** (the default is 1) | **Only your own laptop**: local Kubernetes deployments, Prometheus, stopping your cluster |
+| Options **4–5**, `--delete-harness-project`, `--full-cleanup` | Your laptop, plus the Harness resources **you** created (and your Docker Hub repo). It **never** deletes a shared or admin-created project, and never touches other participants' resources — even though its menu text says "Removes: Harness project" |
+| Option **6** (force delete via API) | In a shared or admin-created project it refuses to delete anything in Harness (it only cleans up your laptop and Docker Hub repo) |
+
+Rules for a shared project:
+1. **Make sure you have the current version** before running `stop-demo.sh` at all: `git pull` (or the branch your lead gave you).
+2. **If you're not sure which version you have, only use options 1–3.**
+3. **Leave removing Harness resources to your workshop lead.**
+
+
+
+---
+
 ## Part A: Workshop lead (once, for everyone)
 
 Skip this part if you're setting up the demo just for yourself in your own Harness account.
@@ -131,8 +152,8 @@ Then follow the labs in order, starting with Lab 0's verification section.
 - **Re-run** any time: `./start-demo.sh`. Your previous answers are offered as defaults; answer **n** to *Build images?* and **1** (skip) to the Terraform question to make it quick.
 - **Delegate disappeared** (e.g. after restarting your cluster): just re-run `./start-demo.sh` — it notices and offers to reinstall it.
 - Experienced users can pre-answer questions with flags (`--skip-docker-build`, `--skip-terraform`, `--skip-delegate`, `--org <id>`, `--participant <id>`, `--colima-arch native|amd64`); nobody *needs* them.
-- **Stop for the day**: `./stop-demo.sh` → option 1. Your Harness resources stay.
-- **Remove your Harness resources**: `./stop-demo.sh --delete-harness-project`. In a shared or admin-created project this removes **only your** resources — the project itself and other people's resources are never deleted.
+- **Stop for the day**: `./stop-demo.sh` → option **1** (local only; your Harness resources stay). Read the shared-project warning at the top of this guide first.
+- **Remove your Harness resources**: in a shared project, leave this to your workshop lead. (With the current version, `./stop-demo.sh --delete-harness-project` removes only the resources *you* created; older versions delete the whole project.)
 
 ---
 
