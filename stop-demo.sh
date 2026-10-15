@@ -322,6 +322,11 @@ HARNESS_DELETE_SUCCESS=false
 
 # Delete Harness project via API; returns 0 on success, 1 on failure
 delete_harness_project_via_api() {
+  if [ "$SHARED_PROJECT" = true ]; then
+    print_info "Not deleting project '$PROJECT_NAME': it existed before this kit ran or is shared"
+    print_info "(PROJECT_PREEXISTING/PARTICIPANT_ID in .demo-config). Only your own resources are removed."
+    return 1
+  fi
   if [ -z "$HARNESS_ACCOUNT_ID" ] || [ -z "$HARNESS_PAT" ] || [ -z "$PROJECT_IDENTIFIER" ]; then
     print_error "Missing required credentials for API call"
     print_info "HARNESS_ACCOUNT_ID: $([ -n "$HARNESS_ACCOUNT_ID" ] && echo "set" || echo "NOT SET")"
@@ -331,13 +336,13 @@ delete_harness_project_via_api() {
   fi
 
   print_info "Account: ${HARNESS_ACCOUNT_ID}"
-  print_info "Org: default"
+  print_info "Org: $HARNESS_ORG_ID"
   print_info "Project: $PROJECT_IDENTIFIER"
   echo ""
   print_info "Deleting '$PROJECT_NAME' project via API..."
 
   PROJECT_DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
-    "https://app.harness.io/ng/api/projects/${PROJECT_IDENTIFIER}?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=default" \
+    "https://app.harness.io/ng/api/projects/${PROJECT_IDENTIFIER}?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=${HARNESS_ORG_ID}" \
     -H "x-api-key: ${HARNESS_PAT}" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json" 2>&1)
@@ -440,6 +445,9 @@ if [ -f "$CONFIG_FILE" ]; then
   DOCKER_PAT=$(grep "DOCKER_PAT=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
   PROJECT_NAME=$(grep "PROJECT_NAME=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2-)
   PROJECT_IDENTIFIER=$(grep "PROJECT_IDENTIFIER=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
+  HARNESS_ORG_ID=$(grep "^HARNESS_ORG_ID=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
+  PARTICIPANT_ID=$(grep "^PARTICIPANT_ID=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
+  PROJECT_PREEXISTING=$(grep "^PROJECT_PREEXISTING=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2)
 
   # Show what was loaded (for debugging)
   if [ -n "$HARNESS_ACCOUNT_ID" ]; then
@@ -464,6 +472,15 @@ fi
 # Default to "Base Demo" if project name not set
 PROJECT_NAME=${PROJECT_NAME:-Base Demo}
 PROJECT_IDENTIFIER=${PROJECT_IDENTIFIER:-Base_Demo}
+HARNESS_ORG_ID=${HARNESS_ORG_ID:-default}
+
+# A project this kit didn't create (pre-created by an admin) or one shared by several
+# participants must never be deleted by cleanup - only this user's own resources.
+SHARED_PROJECT=false
+if [ "$PROJECT_PREEXISTING" = true ] || [ -n "$PARTICIPANT_ID" ]; then
+  SHARED_PROJECT=true
+fi
+PIPELINE_IDENTIFIER="Workshop_Build_and_Deploy${PARTICIPANT_ID:+_$PARTICIPANT_ID}"
 
 # Check environment variable for Harness PAT (overrides cached value)
 if [ -n "$DEMO_BASE_PAT" ]; then
@@ -707,10 +724,7 @@ fi  # End of K8S_AVAILABLE check
 if [ "$DELETE_HARNESS_PROJECT" = true ]; then
   print_section "Deleting Harness Resources"
 
-  # Load credentials
-  if [ -f ".demo-config" ]; then
-    source .demo-config
-  fi
+  # Credentials were loaded from .demo-config at startup (never `source` it: values may contain spaces)
   if [ -f "kit/se-parms.tfvars" ]; then
     HARNESS_ACCOUNT_ID=$(grep 'account_id' kit/se-parms.tfvars | cut -d'"' -f2)
   fi
@@ -737,7 +751,11 @@ if [ "$DELETE_HARNESS_PROJECT" = true ]; then
     print_info "Found Terraform state file"
     echo ""
     echo -e "${YELLOW}Will delete all Harness resources via Terraform:${NC}"
-    echo "  - '$PROJECT_NAME' project"
+    if [ "$SHARED_PROJECT" = true ]; then
+      echo "  - (NOT the '$PROJECT_NAME' project itself - it is pre-existing/shared)"
+    else
+      echo "  - '$PROJECT_NAME' project"
+    fi
     echo "  - Code repositories"
     echo "  - Pipelines"
     echo "  - Services"
@@ -763,11 +781,11 @@ if [ "$DELETE_HARNESS_PROJECT" = true ]; then
         # First, delete the pipeline to remove references to connectors, templates, etc.
         if [ -n "$HARNESS_ACCOUNT_ID" ] && [ -n "$HARNESS_PAT" ]; then
           print_section "Deleting Harness Pipeline"
-          print_info "Deleting 'Workshop Build and Deploy' pipeline..."
+          print_info "Deleting pipeline '$PIPELINE_IDENTIFIER'..."
 
           # Try to delete the pipeline via API
           PIPELINE_DELETE_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
-            "https://app.harness.io/pipeline/api/pipelines/Workshop_Build_and_Deploy?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=default&projectIdentifier=${PROJECT_IDENTIFIER}" \
+            "https://app.harness.io/pipeline/api/pipelines/${PIPELINE_IDENTIFIER}?accountIdentifier=${HARNESS_ACCOUNT_ID}&orgIdentifier=${HARNESS_ORG_ID}&projectIdentifier=${PROJECT_IDENTIFIER}" \
             -H "x-api-key: ${HARNESS_PAT}" 2>/dev/null)
 
           HTTP_CODE=$(echo "$PIPELINE_DELETE_RESPONSE" | tail -n 1)
@@ -890,6 +908,16 @@ if [ "$DELETE_HARNESS_PROJECT" = true ]; then
                 print_info "Cancelling Terraform destroy"
                 cd ..
                 exit 0
+              fi
+            fi
+
+            if [ "$SKIP_TERRAFORM" = false ] && [ "$SHARED_PROJECT" = true ] && \
+               $IAC_CMD state list 2>/dev/null | grep -q '^harness_platform_project.base_demo$'; then
+              print_info "Project '$PROJECT_NAME' is pre-existing/shared: removing it from $IAC_CMD state so destroy leaves it alone"
+              if ! $IAC_CMD state rm harness_platform_project.base_demo > /dev/null; then
+                print_error "Could not remove the project from state - aborting destroy to protect the shared project"
+                SKIP_TERRAFORM=true
+                TERRAFORM_SUCCESS=true
               fi
             fi
 
@@ -1156,10 +1184,10 @@ if [ "$STOP_CLUSTER" = true ] && ([ "$K8S_AVAILABLE" = true ] || [ -n "$K8S_TYPE
     # Delete Colima VM if requested (from custom menu or complete cleanup)
     if [ "$DELETE_COLIMA_VM" = true ]; then
       print_info "Deleting Colima VM..."
-      colima delete -f
-      print_status "Colima VM deleted"
+      colima delete -f --data
+      print_status "Colima VM and its data disk deleted"
       echo ""
-      print_info "To start fresh, run: colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes"
+      print_info "To start fresh, run: ./start-demo.sh (it creates Colima in your chosen mode)"
     elif [ "$DELETE_HARNESS_PROJECT" = true ] && [ "$DELETE_PROMETHEUS" = true ]; then
       # For complete cleanup (option 5), offer to delete the Colima VM
       echo ""
@@ -1168,10 +1196,10 @@ if [ "$STOP_CLUSTER" = true ] && ([ "$K8S_AVAILABLE" = true ] || [ -n "$K8S_TYPE
 
       if [[ "$DELETE_VM_PROMPT" =~ ^[Yy]([Ee][Ss])?$ ]]; then
         print_info "Deleting Colima VM..."
-        colima delete -f
-        print_status "Colima VM deleted"
+        colima delete -f --data
+        print_status "Colima VM and its data disk deleted"
         echo ""
-        print_info "To start fresh, run: colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes"
+        print_info "To start fresh, run: ./start-demo.sh (it creates Colima in your chosen mode)"
       fi
     fi
   elif [ "$K8S_TYPE" = "minikube" ]; then
@@ -1292,7 +1320,7 @@ if [ "$DELETE_HARNESS_PROJECT" = false ] && [ "$DELETE_PROMETHEUS" = false ]; th
   if [ "$STOP_CLUSTER" = true ]; then
     echo -e "${CYAN}1. Start your Kubernetes cluster:${NC}"
     if [ "$K8S_TYPE" = "colima" ]; then
-      echo "   colima start --vm-type=vz --vz-rosetta --arch x86_64 --cpu 4 --memory 8 --kubernetes"
+      echo "   colima start   (restarts the existing VM with its saved settings)"
     elif [ "$K8S_TYPE" = "minikube" ]; then
       echo "   minikube start"
     fi
