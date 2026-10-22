@@ -65,13 +65,13 @@ brew install colima docker kubectl helm terraform docker-buildx
 mkdir -p ~/.docker/cli-plugins && ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" ~/.docker/cli-plugins/docker-buildx
 ```
 
-**Linux / Windows**: install Docker (with buildx), kubectl, helm, Terraform (or OpenTofu), and a local Kubernetes (minikube, Docker Desktop, or Rancher Desktop). Windows users run the scripts from Git Bash or WSL2 — see the README's Windows section.
+**Linux / Windows**: install Docker (with buildx), kubectl, helm, Terraform (or OpenTofu), Python 3 (callable as `python3`), and a local Kubernetes (minikube, Docker Desktop, or Rancher Desktop). Windows users run the scripts from Git Bash or WSL2 — the README's [Windows section](README.md#windows-users---important-setup-notes) has the `winget` commands, minikube install steps and the Python check.
 
 **Check:**
 ```bash
-docker --version && docker buildx version && kubectl version --client && helm version && terraform version
+docker --version && docker buildx version && kubectl version --client && helm version && terraform version && python3 --version
 ```
-All five should print versions. (`docker buildx version` failing on a Mac means the `ln -sfn` line above wasn't run.)
+All six should print versions. (`docker buildx version` failing on a Mac means the `ln -sfn` line above wasn't run.)
 
 ### B3. Create your Harness API token (the most common mistake)
 

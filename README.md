@@ -10,7 +10,9 @@ This repository is your complete training environment for mastering Harness demo
 
 Built from our Unscripted conference workshop materials, this hands-on training culminates in a **customer pitch recording** where you demonstrate your ability to sell Harness to prospective clients.
 
-All demo resources are created in a dedicated Harness project (default: **"Base Demo"**, customizable during setup) to keep demo activities segregated from other projects. Please note that if you using a partner licensed Harness instance, it will be important to name your project something other than the default as other colleagues may have already created a project named "Base Demo".
+All demo resources are created in one shared Harness project, **"Onboarding"**, which keeps demo activities segregated from other projects. Everyone works in that same project: setup asks each person for a short **name/ID** (e.g. `alex`) and adds it to everything it creates for them (`workshop_k8s_alex`, `alex-k8s-delegate`, ...), so nobody's resources collide. You need the **Project Admin** role on Onboarding; you do not need (and won't get) org-level rights.
+
+**New here? Follow [HOWTO.md](HOWTO.md)** — the step-by-step setup checklist, including what to answer at each prompt and what to do if a run fails. This README is the full reference.
 
 ## Training Objectives
 
@@ -42,7 +44,7 @@ This training consists of four progressive sections:
 - **Self-Contained**: All necessary components included (Terraform configs, sample application code)
 - **Customizable**: Use as a foundation for building customer-specific demonstrations
 - **Field-Tested**: Based on materials from Harness Unscripted workshops
-- **Project Segregation**: All resources created in a dedicated project (customizable name)
+- **Project Segregation**: All resources live in the dedicated Onboarding project, tagged with each person's name/ID
 
 ## What This Demo Showcases
 
@@ -79,40 +81,42 @@ The demo kit consists of:
     brew install colima docker kubectl
     colima start --vm-type=vz --vz-rosetta --arch aarch64 --cpu 4 --memory 8 --kubernetes --runtime docker
     ```
-    Note: The native VM uses Apple's Virtualization.framework and is fast; amd64-only container images still run inside it via Rosetta. An amd64-emulated VM is available with `./start-demo.sh --colima-arch amd64` (also needs `brew install qemu lima-additional-guestagents`), but on Apple Silicon `--arch x86_64` runs a qemu software-emulated VM that is very slow and can be unstable — native is recommended. The `start-demo.sh` script will detect missing dependencies and offer to install them automatically.
+    Note: The native VM uses Apple's Virtualization.framework and is fast; amd64-only container images still run inside it via Rosetta. `start-demo.sh` always uses the native VM on Apple Silicon (it doesn't ask), detects missing Colima dependencies and offers to install them with Homebrew. (An amd64-emulated VM exists only behind the `--colima-arch amd64` flag; on Apple Silicon that is qemu software emulation — very slow and can be unstable.)
   - **macOS (Intel)**: Choose one - [minikube](https://minikube.sigs.k8s.io/docs/start/), [Colima](https://github.com/abiosoft/colima), [Docker Desktop](https://www.docker.com/products/docker-desktop), or [Rancher Desktop](https://rancherdesktop.io/)
   - **Windows**: [minikube](https://minikube.sigs.k8s.io/docs/start/) (recommended), [Docker Desktop](https://www.docker.com/products/docker-desktop), or [Rancher Desktop](https://rancherdesktop.io/)
   - **Linux**: [minikube](https://minikube.sigs.k8s.io/docs/start/) or your preferred K8s distribution
 - **Minimum Cluster Resources**: 4 CPU cores and 8GB memory
   - The `start-demo.sh` script validates cluster resources and provides remediation guidance if insufficient
 - **kubectl**: Kubernetes CLI (usually included with above tools)
-- **Helm**: Kubernetes package manager (**required** — `start-demo.sh` uses it to install the Harness delegate)
+- **Helm**: Kubernetes package manager (**required** — `start-demo.sh` uses it to install the Harness delegate; it is only checked at that step, so install it up front)
 - **Docker buildx plugin**: Used to build multi-architecture images. Docker Desktop includes it; Homebrew's `docker` CLI does not:
   ```bash
   brew install docker-buildx
   mkdir -p ~/.docker/cli-plugins && ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" ~/.docker/cli-plugins/docker-buildx
   ```
   `start-demo.sh` offers to do this for you. Without buildx, `docker build` falls back to the deprecated legacy builder (single architecture only).
-- **Terraform**: Infrastructure as Code tool (v1.0+)
-- **Node.js & npm**: For frontend application (Node 20+)
-- **Python**: For backend application (Python 3.8+)
+- **Terraform**: Infrastructure as Code tool (v1.0+). OpenTofu works too; if both are installed the script asks which to use
+- **Python 3, callable as `python3`**: **required** — the setup scripts use it to read Harness API responses (organization and project lists, delegate status), check tokens and personalize the lab guides. macOS and Linux have it; on Windows see the Windows notes below
+- **curl**: used for all Harness and Docker Hub API calls (included with macOS, Linux and Git for Windows)
+- **Node.js & npm** (Node 20+) and **Python 3.8+ with pip**: only for developing the frontend/backend apps locally — not needed to run the demo
 
 ### Required Accounts
 - **Harness Account**: Sign up at [app.harness.io](https://app.harness.io)
   - Enable modules: CI (Continuous Integration), CD (Continuous Delivery), Code Repository
   - **Important**: Harness Cloud requires credit card verification (free tier available)
   - Add credit card in Account Settings > Billing to enable Harness Cloud for CI builds
+  - **Access to the Onboarding project**: the **Project Admin** role on it. That is enough; org rights are not needed
   - **Harness API token (required for setup and cleanup)** — create before running `start-demo.sh`:
-    1. Click your profile (bottom-left) → **My API Keys & Tokens**
-    2. Create an API key if needed (**+ API Key**), e.g. `partner-kit-key`
-    3. Click **+ Token** on that key — **an API key alone is not enough**; you need a token under it
-    4. Set permissions to **All resources / All scopes** (or Admin/API access)
+    1. If your login belongs to more than one Harness account, switch to the right account first — tokens only work in the account they were created in
+    2. Click your profile (bottom-left) → **My API Keys & Tokens**
+    3. Create an API key if needed (**+ API Key**), e.g. `partner-kit-key`
+    4. Click **+ Token** on that key — **an API key alone is not enough**; you need a token under it
     5. Copy the token immediately — it starts with `pat.` and is shown only once
-    6. Paste it when `start-demo.sh` prompts, or set `export DEMO_BASE_PAT="pat.xxx"`
-  - **Updating your token**: If cleanup or Terraform fails with `401 Unauthorized`, generate a new **+ Token** and re-run with `export DEMO_BASE_PAT="pat.xxx"` or delete `.demo-config` to re-enter credentials
+    6. Paste it when `start-demo.sh` asks. It is checked on the spot (an API key pasted by mistake gets its own message) and saved for later runs. `export DEMO_BASE_PAT="pat.xxx"` before running pre-answers the question
+  - **Updating your token**: when the saved token stops working, `start-demo.sh` says so and asks for a new one; create a new **+ Token** and paste it
 - **Docker Hub Account**: Sign up at [hub.docker.com](https://hub.docker.com)
   - Create a repository named `harness-demo`
-  - Generate a Personal Access Token (Settings > Security > Personal Access Tokens)
+  - Create a **Personal access token** (Account settings → Personal access tokens) with **Read & Write** access (add **Delete** if you want `stop-demo.sh` to be able to delete the repository). `start-demo.sh` asks for it once and checks it with Docker Hub. **Being logged in to Docker Desktop is not enough**: Harness's Docker connector (used by the Lab 2 pipeline to push images) and your cluster's image pulls need the token itself
 
 ### System Requirements
 
@@ -136,9 +140,10 @@ The demo kit consists of:
 #### Platform-Specific Notes
 
 **🍎 Apple Silicon (M1/M2/M3/M4):**
-- Colima is **required**; `start-demo.sh` asks which VM architecture to use (default: **native arm64**) and remembers the choice (`COLIMA_ARCH_MODE` in `.demo-config`)
+- Colima is **required**; `start-demo.sh` always uses a **native arm64** VM (no question)
 - Native mode: `colima start --vm-type=vz --vz-rosetta --arch aarch64 ...` — fast, and amd64-only images still run via Rosetta
-- amd64 mode (`--colima-arch amd64`): a qemu software-emulated x86 VM — very slow and can be unstable; needs `qemu` and `lima-additional-guestagents`
+- If an old x86_64 Colima VM is found (e.g. from an earlier version of this kit), the script offers to recreate it as native arm64
+- amd64 mode exists only behind the `--colima-arch amd64` flag: a qemu software-emulated x86 VM — very slow and can be unstable; needs `qemu` and `lima-additional-guestagents`
 - The script checks the Docker daemon's real architecture (`docker info --format '{{.Architecture}}'`), not Colima's config
 - **Switching architectures requires deleting Colima's data disk**: `colima delete --data` (plain `colima delete` keeps it, and the old cluster's data breaks Kubernetes on the new VM)
 - Images are built for both linux/amd64 and linux/arm64, so the same tags work on Harness Cloud and on Apple Silicon clusters
@@ -159,7 +164,7 @@ The automation scripts (`start-demo.sh` and `stop-demo.sh`) are bash scripts tha
 
 **Option 1: Git Bash (Recommended for Simplicity)**
 - Install [Git for Windows](https://git-scm.com/download/win) which includes Git Bash
-- Install Docker Desktop, kubectl, helm, and Terraform **in Windows** (not WSL)
+- Install Docker Desktop, kubectl, helm, Terraform, minikube and Python 3 **in Windows** (not WSL) — see "Installing the tools" below
 - Run all commands in Git Bash terminal
 - Docker Desktop's Kubernetes integration works seamlessly
 - ✅ **Pros**: Simpler setup, native Windows Docker performance
@@ -168,24 +173,63 @@ The automation scripts (`start-demo.sh` and `stop-demo.sh`) are bash scripts tha
 **Option 2: WSL2 (Recommended for Advanced Users)**
 - Install [Windows Subsystem for Linux 2 (WSL2)](https://docs.microsoft.com/en-us/windows/wsl/install)
 - Install Docker Desktop for Windows with WSL2 integration enabled
-- Install kubectl, helm, and Terraform **inside WSL** using Linux package managers
+- Install kubectl, helm, and Terraform **inside WSL** using Linux package managers (Python 3 is normally already there)
 - Run all commands in WSL terminal (Ubuntu, Debian, etc.)
 - ✅ **Pros**: Full Linux compatibility, better for complex workflows
 - ⚠️ **Networking**: WSL2 localhost forwarding handles port access automatically
 - ⚠️ **Paths**: Use Linux paths (`/home/user/`) not Windows paths (`C:\Users\`)
 
+**Installing the tools (Git Bash option)**
+
+With the Windows Package Manager, from PowerShell or Command Prompt (package IDs from the [winget-pkgs](https://github.com/microsoft/winget-pkgs) repository):
+```powershell
+winget install Git.Git
+winget install Docker.DockerDesktop
+winget install Kubernetes.kubectl
+winget install Helm.Helm
+winget install Hashicorp.Terraform
+winget install Kubernetes.minikube
+winget install Python.Python.3.14
+```
+Then **close every terminal and open a new Git Bash**, so the new programs are on your `PATH`. (Python's winget ID includes the minor version; any current 3.x works.)
+
+**Installing minikube** (where people most often get stuck) — the [minikube Get Started page](https://minikube.sigs.k8s.io/docs/start/) lists three ways for Windows x86-64:
+- **winget**: `winget install Kubernetes.minikube`
+- **Chocolatey**: `choco install minikube`
+- **.exe installer**: download and run the [latest minikube-installer.exe](https://storage.googleapis.com/minikube/releases/latest/minikube-installer.exe). If you instead download the plain `minikube.exe`, minikube's instructions add its folder to the system `PATH` with a PowerShell command that must be run **as Administrator**
+
+Whichever you use, minikube's docs say to **close the terminal and open a new one** before running `minikube` — a terminal opened before the install doesn't see it. Check in a new Git Bash: `minikube version`.
+
+**minikube drivers on Windows** (from minikube's [driver docs](https://minikube.sigs.k8s.io/docs/drivers/)):
+- **Docker** (uses Docker Desktop, which you need anyway): Docker Desktop must be running and set to **Linux containers**, not Windows containers. Check: `docker info --format '{{.OSType}}'` prints `linux`
+- **Hyper-V**: only on 64-bit Windows 10/11 **Enterprise, Pro or Education** with Hyper-V enabled — not Windows Home
+- The demo needs 4 CPUs and 8 GB for the cluster: `minikube start --cpus=4 --memory=8g` (the script offers to recreate a smaller cluster with these values). With the Docker driver the cluster runs inside Docker Desktop, so Docker Desktop itself must have that much available: `docker info --format '{{.NCPU}} CPUs, {{.MemTotal}} bytes'`
+
+**Python 3 under Git Bash** — the scripts call `python3`, and they stop with a cryptic error without it. Check in Git Bash:
+```bash
+python3 --version
+```
+It must print a version. If it says the command isn't found, or opens the Microsoft Store, Python isn't installed or Windows' placeholder is in the way: install Python (above or from [python.org](https://www.python.org/downloads/)), then in Windows open Start → **Manage app execution aliases** and check the Python entries (Python's own Windows docs point there for this problem), and open a new Git Bash.
+
 **Kubernetes Options for Windows:**
-- **minikube** (recommended by the script) - Works with both Git Bash and WSL2
+- **minikube** (recommended by the script) - Works with both Git Bash and WSL2. Keep `minikube tunnel` running in a separate terminal while you use the demo (it may ask for your password)
 - **Docker Desktop** - Enable Kubernetes in settings (Settings > Kubernetes > Enable Kubernetes)
 - **Rancher Desktop** - Alternative to Docker Desktop with built-in Kubernetes
+
+If minikube isn't installed, `start-demo.sh` asks whether you have Docker Desktop or Rancher Desktop with Kubernetes instead; answer **y** only if Kubernetes is actually enabled there.
 
 **Verification:**
 After choosing your approach, verify your bash environment works:
 ```bash
 # In Git Bash or WSL terminal
-bash --version    # Should show bash version
-docker --version  # Should show Docker version
-kubectl version   # Should show kubectl version
+bash --version              # Should show bash version
+docker --version            # Should show Docker version
+docker info --format '{{.OSType}}'   # Should print: linux
+kubectl version --client    # Should show kubectl version
+helm version                # Should show helm version
+terraform version           # Should show Terraform version
+python3 --version           # Should show Python 3.x
+minikube version            # If you use minikube
 ```
 
 ## Quick Start Guide
@@ -193,10 +237,15 @@ kubectl version   # Should show kubectl version
 ### Step 1: Clone the Repository
 
 ```bash
-# Clone this repository
-git clone https://github.com/harness-community/partner-demo-kit.git
+# Clone this repository (the fix/acn-nfr branch has the current setup scripts)
+git clone -b fix/acn-nfr https://github.com/cdhendley/harness-partner-demo-kit.git partner-demo-kit
 cd partner-demo-kit
+
+# Already cloned? Get the latest:
+git fetch && git checkout fix/acn-nfr && git pull
 ```
+
+> **Use this branch.** The upstream `harness-community/partner-demo-kit` `main` branch still has the old setup script, which tries to create a new Harness project (a 403 for anyone who is only Project Admin) and whose cleanup can delete a shared project.
 
 **Recommended Location**: Save in an easily accessible location like:
 - `~/projects/partner-demo-kit`
@@ -238,68 +287,54 @@ This allows you to follow the lab instructions while working in the Harness plat
 
 ### What the Startup Script Does
 
-The `start-demo.sh` script automates the **complete demo setup** from local infrastructure to Harness resources:
+The `start-demo.sh` script automates the **complete demo setup**, from local infrastructure to Harness resources. In the order it runs:
 
-**1. Prerequisites Check**
-- Verifies Docker, kubectl, helm, Terraform, and other required tools are installed
-- Checks for the Docker buildx plugin (offers to install/link it)
-- Checks that Docker daemon is running
-
-**2. Platform & Kubernetes Detection**
+**1. Platform & Kubernetes**
 - Detects your operating system and architecture (macOS/Windows/Linux, ARM64/AMD64)
-- Validates Kubernetes tool based on platform:
-  - Apple Silicon Macs: Requires Colima; prompts for native arm64 (default) or amd64 emulation
-  - Windows: Recommends minikube (allows Docker Desktop/Rancher Desktop)
-  - Other platforms: Flexible (minikube, Colima, Docker Desktop, Rancher Desktop)
-- Automatically starts Colima/minikube if needed
-- Verifies the Docker daemon's actual architecture matches the chosen Colima mode
-- **Validates cluster resources** (minimum 4 CPU cores, 8GB memory) with remediation guidance
+- Checks for the right Kubernetes tool for your platform:
+  - Apple Silicon Macs: Colima, always a native arm64 VM (offers to `brew install` missing pieces, starts Colima, and offers to recreate an old x86_64 VM as native)
+  - Windows: minikube recommended; Docker Desktop or Rancher Desktop with Kubernetes enabled also work (the script asks)
+  - Intel Macs and Linux: minikube, Colima, Docker Desktop or Rancher Desktop
+- Checks that Docker and kubectl are installed and the Docker daemon is running
+- Starts minikube if it's your cluster and isn't running; verifies the cluster answers
+- **Validates cluster resources** (minimum 4 CPU cores, 8GB memory) and offers to recreate Colima/minikube with enough
 
-**3. Prometheus Deployment** (Background)
-- Creates monitoring namespace if it doesn't exist
-- **Deploys Prometheus in background** (non-blocking - runs while Docker builds)
-- Verifies Prometheus status at end of script
+**2. Background work**
+- Creates the `dockerhub-pull` image pull secret if a verified Docker Hub token is already saved
+- **Deploys Prometheus in the background** (for continuous verification) while the rest runs
 
-**4. Docker Hub Authentication** (Smart Detection)
-- **If already logged in** (via Docker Desktop): Uses existing credentials automatically
-- **If not logged in**: Checks for saved username in these locations (in order):
-  1. Local `.demo-config` file (from previous runs)
-  2. `kit/se-parms.tfvars` (Terraform configuration)
-  3. Interactive prompt (if not found)
-- Saves your username to `.demo-config` for future runs
-- Prompts for login with helpful instructions about using a Personal Access Token (PAT)
+**3. Harness settings** (asked once, up front)
+- Harness **account ID**
+- Harness **API token**: checked locally first (must look like `pat.<account>.<id>.<secret>` — an API key pasted by mistake gets a specific message), then with Harness
+- **Organization**: a numbered list of the orgs your token can see
+- **Project**: a numbered list of only the projects in that org where you have the permissions the kit needs (Project Admin). "Create a NEW project" is offered only if you are allowed to create projects
+- **Your name/ID**: a short tag, e.g. `alex`, added to everything the kit creates for you; refused if someone else in the project already uses it
 
-**5. Docker Image Builds** (Parallel!)
-- **Builds all three images simultaneously** (backend, test, docs) in parallel
-- Uses docker buildx (BuildKit) to build **linux/amd64 and linux/arm64** under the same tag, so images work on Harness Cloud (amd64) and Apple Silicon clusters
-- Progress tracking shows status of each build in real-time
-- Pushes to your Docker Hub repository
-- Provides clear error messages if build or push fails
-- **Saves 2-4 minutes** vs sequential builds
+**4. Docker Hub and images**
+- Asks whether to build images (**Y** on the first run; **n** later saves time)
+- Asks for your Docker Hub **access token** (once; checked with Docker Hub, saved) and logs in with it
+- Checks for the Docker buildx plugin (offers to install it on macOS)
+- **Builds backend, test and docs images in parallel** with docker buildx for **linux/amd64 and linux/arm64** under the same tag (works on Harness Cloud and Apple Silicon), personalizes the lab guides with your project and name/ID, and pushes to your Docker Hub `harness-demo` repository
+- Refreshes the `dockerhub-pull` secret in the `default` and `harness-delegate-ng` namespaces with the verified token
 
-**6. Harness Configuration & IaC Provisioning** (Automated!)
-- **Smart credential collection**: Reuses values from previous runs or prompts for:
-  - Harness Account ID (from URL when viewing your profile)
-  - Harness Personal Access Token (PAT)
-  - Docker Hub password/PAT (if not already logged in)
-- **Automatic configuration**: Updates `kit/se-parms.tfvars` with your values
-- **Pre-flight checks** before Terraform: token shape (`pat.<account>.<id>.<secret>` — an API key alone is not a token), token account matches your Account ID, org exists, permissions (project-create for a new project; project-scoped edit permissions for an existing one), and participant-ID collisions. Bypass with `DEMO_SKIP_PREFLIGHT=true`
-- **IaC execution**: Runs Terraform init, plan, and apply automatically
-- **Idempotent**: Skips if state file already exists
-- **Creates all Harness resources**: Project (or imports an existing one), connectors, environments, services, monitored services, code repository, etc.
+**5. Harness resources (Terraform/OpenTofu)**
+- Writes `kit/se-parms.tfvars` from your answers
+- **Pre-flight checks** before Terraform: token shape, token account matches your account ID, org exists, permissions (project-create for a new project; project-scoped edit rights for an existing one), and name/ID collisions. Bypass with `DEMO_SKIP_PREFLIGHT=true`
+- On re-runs, asks whether to re-run Terraform (default: yes)
+- Imports the existing project into Terraform state (never recreates it), and **reuses the `partner_demo_kit` code repository if it already exists in the project**; otherwise Harness imports it from GitHub
+- Runs init, plan and apply. If Harness's GitHub import fails with *"Access denied … at github"* (Harness's anonymous GitHub access is throttled), the apply is retried a few times; if it still fails, the script prints how to import the repository in the Harness UI, after which a re-run reuses it
 
-**7. Harness Delegate Installation** (Automated!)
-- Fetches the project's delegate token (`default_token`), the manager endpoint, and the latest delegate image from the Harness API
-- Installs the delegate with Helm at **project scope** into the `harness-delegate-ng` namespace, named to match the connectors: `local-k8s-delegate`, or `<participant>-k8s-delegate` when a participant ID is set
-- Waits until Harness shows it connected. Skip with `--skip-delegate`; the manual fallback is in Lab 0
-
-**8. Lab Documentation**
+**6. Lab documentation**
 - Deploys the docs site on every run (also with `--skip-docker-build`, using the existing docs image) at http://localhost:30001
 - Uses `imagePullPolicy: Always` plus a rollout restart so a rebuilt `docs-latest` is picked up
 
-**9. Status Display**
-- Shows cluster status, Prometheus deployment, and Terraform results
-- Provides clear next steps based on what was configured
+**7. Harness delegate**
+- If the delegate your connectors expect isn't connected, offers to install it
+- Fetches the project's delegate token (`default_token`), the manager endpoint and the latest delegate image from the Harness API
+- Installs it with Helm at **project scope** into the `harness-delegate-ng` namespace, named to match the connectors: `<name/ID>-k8s-delegate` (or `local-k8s-delegate` with no name/ID), and waits until Harness shows it connected. Skip with `--skip-delegate`; the manual fallback is in Lab 0
+
+**8. Status and next steps**
+- Shows cluster, Prometheus and Terraform status and what to do next
 
 ### Script Options
 
@@ -316,69 +351,59 @@ The `start-demo.sh` script automates the **complete demo setup** from local infr
 # Pre-answer the organization question
 ./start-demo.sh --org my_org
 
-# Set a participant ID (for sharing one Harness project - see below)
-./start-demo.sh --participant alice
+# Pre-answer the name/ID question (see "Sharing One Harness Project" below)
+./start-demo.sh --participant alex
 
-# Apple Silicon: choose the Colima VM architecture (default: native)
-./start-demo.sh --colima-arch native
+# Apple Silicon: force a qemu-emulated amd64 Colima VM (slow; without the flag it is always native)
 ./start-demo.sh --colima-arch amd64
 
 # Combine options
 ./start-demo.sh --skip-docker-build --skip-terraform
 ```
 
-All of these are optional: the script asks for every setting interactively (organization, project, participant ID, Colima mode, whether to build images, delegate install) and offers your previous answers as defaults. Flags only pre-answer those questions.
+All of these are optional and nobody needs them: the script asks for every setting interactively (organization, project, name/ID, whether to build images, whether to re-run Terraform, delegate install) and offers your previous answers as defaults. Flags only pre-answer those questions.
 
 Shared helper functions live in [scripts/demo-lib.sh](scripts/demo-lib.sh) (bash 3.2 compatible, so it runs with the macOS system bash).
 
 ### Sharing One Harness Project
 
-Several people can work in **one** Harness project without colliding:
-- Each person picks a **participant ID**: 1-20 lowercase letters/digits, starting with a letter (prompted, or `--participant <id>`; saved as `PARTICIPANT_ID` in `.demo-config`)
-- Terraform appends `_<id>` to identifiers and ` <id>` to names of everything the kit creates — e.g. repository `partner_demo_kit_<id>`, connectors `workshop_k8s_<id>` / `workshopdocker_<id>` / `prometheus_<id>`, environments, infrastructure, backend service, template, and monitored services
+Everyone works in the one **Onboarding** project without colliding:
+- Each person types a **name/ID** — just their name, e.g. `alex`: 1-20 lowercase letters/digits, starting with a letter. Asked on every run (previous answer is the default), saved as `PARTICIPANT_ID` in `.demo-config`. Use the same one every time
+- Terraform appends `_<id>` to identifiers and ` <id>` to names of everything the kit creates for you — connectors `workshop_k8s_<id>` / `workshopdocker_<id>` / `prometheus_<id>`, secrets, environments, infrastructure, backend service, template and monitored services
 - Your delegate becomes `<id>-k8s-delegate`, and the lab guides at http://localhost:30001 are personalized with your names
-- Leave the ID empty to use the original single-user names
-- To reuse an existing project, enter its **exact display name** when prompted; it is imported into Terraform, never recreated
-- `stop-demo.sh` never deletes a shared or pre-existing project — it only destroys your own resources
+- The code repository is the exception: there is **one** `partner_demo_kit` per project, shared by everyone. Whoever runs first (or the workshop lead, ideally) creates it; everyone else's run reuses it
+- The script refuses a name/ID someone else in the project already uses and asks for another
+- You pick the project from a list of the projects you can administer; an existing project is imported into Terraform, never recreated
+- `stop-demo.sh` never deletes a shared or pre-existing project, or the shared repository — it only destroys your own resources
+- Type `none` as the name/ID only if nobody else uses the project; you then get the original single-user names (`workshop_k8s`, `local-k8s-delegate`, ...)
 
 ### First Run vs Subsequent Runs
 
 **First Run (Complete Setup):**
-- Prompts for:
-  - **Project name** (default: "Base Demo") - customizable name for your Harness project
-  - Docker Hub username (unless already logged in via Docker Desktop)
-  - Docker Hub password/PAT
-  - Harness Account ID
-  - Harness Personal Access Token (PAT)
-- Validates project name doesn't use reserved words or conflict with existing projects
-- Saves all credentials to `.demo-config` for future runs
-- Creates Harness resources via Terraform
-- Takes ~6-10 minutes total (parallel Docker builds + IaC provisioning)
+- Asks for: Harness account ID and API token, organization and project (numbered lists), your name/ID, whether to build images, Docker Hub username (unless Docker Desktop already knows it) and access token, and whether to install the delegate
+- Checks both tokens as you paste them; nothing is saved until it is accepted
+- Saves your answers and tokens to `.demo-config`
+- Creates your Harness resources with Terraform and installs your delegate
+- Takes roughly 10-20 minutes, mostly downloads and image builds
 
 **Subsequent Runs:**
-- Detects existing state file and skips Harness resource creation
-- Reuses saved credentials from `.demo-config`
-- Only prompts if saved credentials are missing or invalid
-- Takes ~2-3 minutes for infrastructure verification
+- Offers every previous answer as the default — press Enter to keep it
+- Re-checks the saved tokens and asks again only if one is rejected
+- Asks whether to re-run Terraform (**2**, the default, re-runs it and only changes what's different; **1** skips it)
+- Answer **n** to *Build images?* unless you changed code, your project or your name/ID
+- Redeploys the docs and reinstalls the delegate if it's missing
 
 ### Credential Management
 
-The script stores credentials in `.demo-config` (git-ignored) for convenience:
-- **Project name & identifier** - Your custom Harness project name
-- **Docker Hub username** - Reused for subsequent runs
-- **Harness Account ID** - Saved to avoid re-entering
-- **Harness PAT** - Cached for convenience (can also use `DEMO_BASE_PAT` env var)
-- **Docker Hub password/PAT** - Saved for Terraform configuration
+The script stores your answers in `.demo-config` (git-ignored, readable only by you):
+- **Harness account ID, organization, project and your name/ID**
+- **Harness API token** (`HARNESS_PAT`; `export DEMO_BASE_PAT=...` overrides it)
+- **Docker Hub username and access token** (`DOCKER_PAT`) — also written to `kit/se-parms.tfvars`, from which Terraform stores it in Harness as the secret your Docker connector uses, and into the cluster's `dockerhub-pull` image pull secret
 
 **Security Notes:**
-- `.demo-config` is automatically excluded from Git via `.gitignore`
-- Use Personal Access Tokens (PATs) instead of passwords when possible
-- Docker Hub PAT: https://hub.docker.com/settings/security
-- Harness PAT: Profile > My API Keys & Tokens
-
-**Using Docker Desktop:**
-- If you log in to Docker Hub through Docker Desktop, the script detects this and reuses your session
-- You won't be prompted for Docker credentials during the build phase
+- `.demo-config` and `kit/se-parms.tfvars` are excluded from Git via `.gitignore` — never commit or share them
+- Use access tokens, not passwords: Docker Hub tokens at https://hub.docker.com/settings/security; Harness tokens under Profile > My API Keys & Tokens
+- To be asked for everything again: `rm .demo-config` and re-run
 
 ### When Finished with the Demo
 
@@ -387,35 +412,35 @@ The script stores credentials in `.demo-config` (git-ignored) for convenience:
 ./stop-demo.sh
 ```
 
+> **Shared project (Onboarding)?** Only options **1–3** are purely local. Options 4–7 also remove *your own* Harness resources; they never delete the shared project, the shared `partner_demo_kit` repository or anyone else's resources. When in doubt, use option 1.
+
 **Interactive Cleanup Menu:**
 
-When you run `./stop-demo.sh` without arguments, you'll see a user-friendly menu with the following options:
+When you run `./stop-demo.sh` without arguments, you'll see a menu:
 
-1. **Stop K8s deployments only** (Recommended - preserves Harness resources)
+1. **Stop K8s deployments only** (default, recommended)
    - Removes frontend and backend deployments/services
-   - Keeps Harness project, Prometheus, and cluster running
-   - Easy to restart demo later with: `./start-demo.sh --skip-terraform`
+   - Keeps your Harness resources, Prometheus and the cluster running
+   - Restart later with `./start-demo.sh`
 
 2. **Stop K8s deployments + Delete Prometheus**
-   - Same as option 1, but also removes Prometheus monitoring
 
 3. **Stop K8s deployments + Stop cluster**
-   - Stops local deployments and shuts down Colima/minikube
-   - Preserves Harness resources for next time
+   - Also stops Colima/minikube; Harness resources stay
 
 4. **Full cleanup (delete all Harness resources)**
-   - Deletes your Harness demo project — **unless** it was pre-existing or shared (`PROJECT_PREEXISTING=true` or a `PARTICIPANT_ID` set); then the project is removed from Terraform state before `destroy`, so only your own resources are destroyed
-   - Uses your configured org (`HARNESS_ORG_ID`)
-   - Deletes Docker Hub repository
-   - Removes Prometheus
-   - Keeps cluster running and config files
+   - Destroys the Harness resources **you** created with Terraform. In a shared or pre-existing project (a name/ID set, or `PROJECT_PREEXISTING=true`), the project and the shared repository are removed from Terraform state first, so they are left alone (the menu text still says "Removes: Harness project")
+   - Tries to delete your Docker Hub `harness-demo` repository (needs a Docker Hub token with **Delete** access; otherwise it is skipped)
+   - Removes Prometheus; keeps the cluster running and your config files
 
 5. **Complete cleanup (everything including cluster)**
-   - Same as option 4, but also stops the cluster
-   - Option to delete Colima VM and its data disk for a fresh start (`colima delete -f --data`)
+   - Same as option 4, plus stops the cluster and offers to delete the Colima VM and its data disk (`colima delete -f --data`)
 
-6. **Custom cleanup options**
-   - Choose exactly what to cleanup
+6. **Force delete Harness project via API** (bypasses Terraform state)
+   - For a project the kit created itself when Terraform state is broken. **Refuses** to delete a shared or pre-existing project (it then only cleans up locally)
+
+7. **Custom cleanup options**
+   - Asks about each step separately
 
 0. **Exit without doing anything**
 
@@ -423,11 +448,12 @@ When you run `./stop-demo.sh` without arguments, you'll see a user-friendly menu
 
 For automated/scripted use:
 - `./stop-demo.sh --delete-prometheus` - Also remove Prometheus monitoring
-- `./stop-demo.sh --stop-cluster` - Also stop Kubernetes cluster (Colima or minikube)
-- `./stop-demo.sh --delete-harness-project` - Delete your Harness demo project via API
-- `./stop-demo.sh --delete-docker-repo` - Delete Docker Hub harness-demo repository via API
-- `./stop-demo.sh --delete-config-files` - Delete .demo-config, se-parms.tfvars, and IaC state files
-- `./stop-demo.sh --full-cleanup` - Complete cleanup (all of the above except config files)
+- `./stop-demo.sh --stop-cluster` - Also stop the cluster (Colima or minikube)
+- `./stop-demo.sh --delete-harness-project` - Destroy your Harness resources via Terraform (same protection for shared projects as option 4)
+- `./stop-demo.sh --force-api-delete` - Option 6 (refused for shared/pre-existing projects)
+- `./stop-demo.sh --delete-docker-repo` - Delete the Docker Hub `harness-demo` repository via API
+- `./stop-demo.sh --delete-config-files` - Delete `.demo-config`, `se-parms.tfvars` and the Terraform state files
+- `./stop-demo.sh --full-cleanup` - Prometheus, cluster stop, Harness resources and Docker Hub repo (keeps config files)
 - `./stop-demo.sh --no-interactive` - Skip menu, use minimal cleanup
 
 **Recommended Workflow:**
@@ -443,9 +469,10 @@ To restart the demo later without recreating Harness resources:
 ```
 
 > **Next Steps**: After running `start-demo.sh` successfully:
-> 1. Navigate to [app.harness.io](https://app.harness.io) and select your demo project
-> 2. Configure Harness Code Repository (see Step 8 in Manual Setup below)
-> 3. Follow the lab guides in the [markdown/](markdown/) directory
+> 1. Check the setup: [HOWTO.md Part D](HOWTO.md#part-d-check-it-worked) (lab guides, delegate, the three connector tests, the code repository)
+> 2. Navigate to [app.harness.io](https://app.harness.io) and select the **Onboarding** project
+> 3. Configure Harness Code Repository (see Step 8 in Manual Setup below)
+> 4. Follow the lab guides at http://localhost:30001 (also in the [markdown/](markdown/) directory, without your personalized names)
 
 ---
 
@@ -455,7 +482,9 @@ If you prefer manual control or need to troubleshoot, follow these detailed step
 
 ### Step 2: Set Up Kubernetes
 
-**Option A: Rancher Desktop (Recommended)**
+Use the cluster recommended for your platform (see Prerequisites): **Colima** on Apple Silicon (native arm64 — see the Colima commands in Prerequisites), **minikube** on Windows, any of the options below elsewhere.
+
+**Option A: Rancher Desktop**
 1. Download and install [Rancher Desktop](https://rancherdesktop.io/)
 2. Open Rancher Desktop preferences
 3. Enable Kubernetes
@@ -464,8 +493,8 @@ If you prefer manual control or need to troubleshoot, follow these detailed step
 
 **Option B: minikube**
 ```bash
-# Start minikube
-minikube start
+# Start minikube with the resources the demo needs
+minikube start --cpus=4 --memory=8g
 
 # Enable metrics-server addon
 minikube addons enable metrics-server
@@ -534,10 +563,11 @@ docker buildx build --builder harness-demo-builder --platform linux/amd64,linux/
 - `test-latest` - Python + pytest environment (CI testing only)
 - `demo-base-<tag>` - Frontend Angular application
 
-**Critical**: Remember to replace `dockerhubaccountid` in:
+**Critical**: Replace `dockerhubaccountid` with your Docker Hub username in:
 1. The Docker build/push commands above
-2. [kit/main.tf](kit/main.tf) line ~300: `imagePath: dockerhubaccountid/harness-demo`
-3. Your Harness pipeline's Test Intelligence step to use `test-latest` image
+2. Your Harness pipeline's Test Intelligence step, which uses the `test-latest` image
+
+(`kit/main.tf` needs no edit: the backend service's image path is built from the `docker_username` Terraform variable.)
 
 ### Step 5: Configure Harness Account
 
@@ -548,17 +578,15 @@ docker buildx build --builder harness-demo-builder --platform linux/amd64,linux/
    - Enable: **CI**, **CD**, and **Code Repository**
 
 3. **Harness Delegate**:
-   - `start-demo.sh` **installs the delegate automatically** with Helm at **project scope**, named `local-k8s-delegate` (or `<participant>-k8s-delegate`), and waits for it to connect
+   - `start-demo.sh` **installs the delegate automatically** with Helm at **project scope**, named `<name/ID>-k8s-delegate` (or `local-k8s-delegate` with no name/ID), and waits for it to connect
    - Manual fallback (only if the script couldn't, or you used `--skip-delegate`): see **Lab 0** ([markdown/0-login.md](markdown/0-login.md)) — in **Project Settings > Delegates > New Delegate > Kubernetes > Helm Chart**, run all three commands, and set both the Helm release name and `--set delegateName=` to your delegate name so the connectors find it
 
 4. **Get Your Harness Account ID**:
-   - Click on your profile (top right)
-   - Your account ID is in the URL (e.g., `VEuU4vZ6QmSJZcgvnccqYQ`)
+   - It's the part right after `/account/` in any Harness URL: `https://app.harness.io/ng/account/<ACCOUNT_ID>/...`
 
 5. **Create a Harness API Token**:
-   - Go to your profile > My API Keys & Tokens
-   - Create a new token with appropriate permissions
-   - Save this token securely
+   - Profile (bottom-left) > **My API Keys & Tokens** > your API key > **+ Token** (see Required Accounts above — an API key alone is not a token)
+   - Save the `pat.…` value securely; it is shown only once
 
 ### Step 6: Configure IaC Variables
 
@@ -572,16 +600,25 @@ cd ../kit
 # Replace the placeholder values with your actual values:
 ```
 
-**se-parms.tfvars**:
+**se-parms.tfvars** (this is exactly what `start-demo.sh` writes):
 ```hcl
 account_id = "your-harness-account-id"
+
 docker_username = "your-dockerhub-username"
-DOCKER_PAT = "your-dockerhub-pat"
-project_name = "Base Demo"
-project_identifier = "Base_Demo"
+DOCKER_PAT = "your-dockerhub-access-token"
+
+project_name = "Onboarding"
+project_identifier = "Onboarding"
+
+org_id = "your-org-identifier"
+
+participant_id = "your-name-id"
 ```
 
-**Important**: Also update `dockerhubaccountid` in [kit/main.tf](kit/main.tf) (line ~300) with your Docker Hub username.
+- `org_id`: the organization's **identifier** (the part after `/orgs/` in the project's URL), not its display name
+- `participant_id`: your name/ID (e.g. `alex`); `""` gives the original single-user names
+- `DOCKER_PAT` must be a real Docker Hub access token: Terraform stores it in Harness as the secret the Docker connector uses
+- An existing project must be imported before `apply`, or Terraform tries to create it: `terraform import -var="pat=$DEMO_BASE_PAT" -var-file="se-parms.tfvars" harness_platform_project.base_demo "<org_id>/Onboarding"`. If the project already has the `partner_demo_kit` repository, import that too: `terraform import -var="pat=$DEMO_BASE_PAT" -var-file="se-parms.tfvars" harness_platform_repo.partner_demo_kit "<org_id>/Onboarding/partner_demo_kit"`
 
 ### Step 7: Run Terraform to Create Harness Resources
 
@@ -604,8 +641,8 @@ terraform plan -var="pat=$DEMO_BASE_PAT" -var-file="se-parms.tfvars" -out=plan.t
 terraform apply -auto-approve plan.tfplan
 ```
 
-**What Gets Created** (all in your demo project; with a participant ID, identifiers get `_<id>` and names get ` <id>`):
-- Harness project (your custom name, default: "Base Demo"; an existing project is imported, not recreated)
+**What Gets Created** (all in the Onboarding project; with a name/ID, identifiers get `_<id>` and names get ` <id>`):
+- Harness project (an existing project is imported, not recreated)
 - Kubernetes connector (workshop_k8s)
 - Docker Hub connector (workshopdocker)
 - Prometheus connector
@@ -615,12 +652,12 @@ terraform apply -auto-approve plan.tfplan
 - K8s Dev infrastructure
 - Backend service
 - Monitored services for continuous verification
-- Code repository (partner_demo_kit) mirrored from GitHub
+- Code repository `partner_demo_kit` (one per project, never suffixed): imported from GitHub by the first run, reused by everyone after that
 
 ### Step 8: Configure Harness Code Repository
 
 1. Navigate to Harness UI > **Code Repository** module
-2. Select your demo project
+2. Select the **Onboarding** project
 3. Click on **"partner_demo_kit"** repository
 4. Click **"Clone"** (top right) > **"+Generate Clone Credential"**
 5. Save the generated username and token
@@ -640,22 +677,25 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 5. **Continuous Verification**: Verify deployments using Prometheus metrics
 
 **Access the Demo Application**:
-- **Rancher Desktop**: http://localhost:8080 (automatic)
-- **minikube**: http://localhost:8080 (requires `minikube tunnel` running)
+- **Colima, Rancher Desktop, Docker Desktop**: http://localhost:8080 (automatic)
+- **minikube**: http://localhost:8080 (requires `minikube tunnel` running in a separate terminal)
 
 ## Directory Structure
 
 ```
 .
-├── README.md              # Complete setup and demo guide
+├── README.md              # Complete reference (this file)
+├── HOWTO.md               # Step-by-step setup checklist and troubleshooting by error message
+├── SETUP-IMPROVEMENTS.md  # What the setup scripts do and why (native Colima, buildx, delegate, sharing)
+├── PREEXISTING-PROJECT-SUPPORT.md  # Reusing an admin-created project; non-default orgs
 ├── CLAUDE.md              # Instructions for Claude Code AI assistant
 ├── start-demo.sh          # Automated startup script for local infrastructure
 ├── stop-demo.sh           # Automated shutdown script for cleanup
 ├── scripts/
-│   └── demo-lib.sh        # Shared helpers (participant IDs, pre-flight, Colima, buildx, delegate)
+│   └── demo-lib.sh        # Shared helpers (org/project lists, name/IDs, token checks, pre-flight, Colima, buildx, docs, delegate)
 ├── kit/                   # Terraform Infrastructure as Code
 │   ├── main.tf            # Main IaC configuration
-│   ├── se-parms.tfvars    # Your configuration variables
+│   ├── se-parms.tfvars    # Your configuration (written by start-demo.sh; git-ignored)
 │   └── prometheus.yml     # Prometheus deployment
 ├── backend/               # Django backend application
 │   ├── Dockerfile
@@ -666,7 +706,8 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 │       └── package.json
 ├── harness-deploy/        # Kubernetes manifests
 │   ├── backend/           # Backend K8s resources
-│   └── frontend/          # Frontend K8s resources
+│   ├── frontend/          # Frontend K8s resources
+│   └── docs/              # Lab documentation site (localhost:30001)
 ├── python-tests/          # Test suites for CI demo
 └── markdown/              # Step-by-step lab guides (0-7)
     ├── 0-login.md         # Getting started and verification
@@ -690,16 +731,15 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
   2. Copy the new `pat.*` value (shown only once)
   3. Either export it: `export DEMO_BASE_PAT="pat.xxx"` and re-run the script
   4. Or delete `.demo-config` and run `./start-demo.sh` again to re-enter credentials
-- **Note**: `start-demo.sh` and `stop-demo.sh` now validate cached tokens and will prompt for a fresh one if invalid
+- **Note**: `start-demo.sh` checks the saved token on every run and asks for a new one if it is rejected. For the exact messages (*That isn't an API token*, *looks incomplete*, *Harness rejected this token*) see [HOWTO.md Part F](HOWTO.md#part-f-already-ran-it-and-it-failed)
 
 **Issue**: Cleanup says Harness project was deleted, but it still exists in the UI
 - **Cause**: Usually an expired/invalid cached PAT in `.demo-config` — the old script reported intent, not actual success
-- **Solution**:
+- **Solution** (only for a project the kit created for you alone — never for the shared Onboarding project, which the script refuses to delete anyway):
   ```bash
   export DEMO_BASE_PAT="pat.your-new-token"
   ./stop-demo.sh --force-api-delete
   ```
-  Or delete manually: Harness UI → Projects → your project → ⋮ → Delete Project
 
 **Issue**: Terraform not found
 - **Solution**: Install Terraform from https://www.terraform.io/downloads
@@ -721,7 +761,7 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 
 **Issue**: Colima/Kubernetes is very slow or unstable (Apple Silicon)
 - **Cause**: The VM was started with `--arch x86_64` (or `--colima-arch amd64`). On Apple Silicon that is a qemu software-emulated x86 VM, not Rosetta — it is very slow and can be unstable
-- **Solution**: Switch to the native VM (`./start-demo.sh --colima-arch native`). amd64-only images still run inside it via Rosetta
+- **Solution**: Re-run `./start-demo.sh`; without the `--colima-arch amd64` flag it uses the native VM and offers to recreate the old one. amd64-only images still run inside it via Rosetta
 
 **Issue**: Kubernetes broken after switching Colima architecture (native ↔ amd64)
 - **Cause**: Plain `colima delete` keeps Colima's data disk; the old cluster's data breaks Kubernetes on the new VM
@@ -757,15 +797,20 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 **Issue**: Prometheus connector fails in Harness
 - **Solution**: Use ngrok to expose Prometheus and update the connector URL to the ngrok HTTPS URL
 
-**Issue**: Docker image push fails
-- **Solution**: Verify you're logged in to Docker Hub: `docker login -u your-username`
+**Issue**: Docker image push fails, Docker Hub token rejected, or the **Workshop Docker** connector test fails with invalid credentials
+- **Cause**: wrong username (use your Docker Hub username, not your email), an expired/revoked token, or a setup done with an older copy of this kit, which stored a placeholder instead of the token when Docker Desktop was already logged in
+- **Solution**: create a new Docker Hub access token (Read & Write), update to the current kit, re-run `./start-demo.sh` and answer **2** (re-run Terraform). The script checks the saved token, asks for a new one if it's rejected, and updates the Harness secret and the cluster's pull secret
+
+**Issue**: Terraform fails with *"Access denied to harness-community/partner-demo-kit at github"*
+- **Cause**: Harness imports the demo repository from GitHub without credentials, and Harness's anonymous GitHub access gets throttled (Harness's import documentation recommends "Requires Authorization" for reliable imports). It is on Harness's side
+- **Solution**: the script retries a few times. If it still fails, in the Harness UI open the project → **Code Repository** → dropdown next to **New Repository** → **Import Repository**, repository `harness-community/partner-demo-kit`, name `partner_demo_kit`, tick **Requires Authorization** and enter a GitHub token; then re-run `./start-demo.sh`, which reuses that repository. Workshop leads can do this once per project up front
 
 **Issue**: Image pull error: "pull access denied for harness-demo"
-- **Cause**: The placeholder `dockerhubaccountid` was not replaced with your actual Docker Hub username
+- **Cause**: the image isn't in your Docker Hub `harness-demo` repository (images never built/pushed), the repository name differs, or a pipeline step still uses the placeholder `dockerhubaccountid`
 - **Solution**:
-  1. Update [kit/main.tf](kit/main.tf) line ~300 to use your Docker Hub username: `imagePath: YOUR-USERNAME/harness-demo`
-  2. In Harness UI, verify the service artifact configuration shows `YOUR-USERNAME/harness-demo:backend-latest`
-  3. Re-run the deployment pipeline
+  1. Check https://hub.docker.com that `YOUR-USERNAME/harness-demo` has the `backend-latest` tag; if not, re-run `./start-demo.sh` and answer **Y** to *Build images?*
+  2. In Harness UI, verify the backend service's artifact shows `YOUR-USERNAME/harness-demo:backend-latest` (Terraform sets this from your Docker Hub username)
+  3. Replace any `dockerhubaccountid` you typed into a pipeline step with your username, then re-run the pipeline
 
 **Issue**: Test Intelligence step fails with "pytest: not found"
 - **Cause**: The Test Intelligence step is not using the correct container image
@@ -794,7 +839,8 @@ Follow the step-by-step lab guides in the `markdown/` directory which walk throu
 
 **Issue**: Harness delegate not connecting
 - **Solution**: Check delegate pod status: `kubectl get pods -n harness-delegate-ng`
-- The connectors expect the delegate name `local-k8s-delegate` (or `<participant>-k8s-delegate`); re-run `./start-demo.sh --skip-docker-build --skip-terraform` to reinstall it, or follow the manual steps in Lab 0
+- The connectors expect the delegate name `<name/ID>-k8s-delegate` (or `local-k8s-delegate` with no name/ID); re-run `./start-demo.sh` (answer **n** to images, **1** to skip Terraform) and it offers to reinstall it, or follow the manual steps in Lab 0
+- A delegate installed under any other name connects but the connector tests fail
 
 ### Verifying Your Setup
 
@@ -825,25 +871,25 @@ To start fresh and reset everything, you have several options:
 ```
 
 This single command will:
-- Delete your Harness demo project via API (with confirmation prompt) — a pre-existing or shared project is never deleted; only your own resources are destroyed
-- Delete the Docker Hub `harness-demo` repository via API (with confirmation prompt)
-- Delete configuration files (.demo-config, se-parms.tfvars, state files)
+- Destroy the Harness resources you created (Terraform) — the shared Onboarding project and the shared `partner_demo_kit` repository are never deleted
+- Delete the Docker Hub `harness-demo` repository via API (needs a token with Delete access; otherwise skipped)
 - Remove Kubernetes deployments (frontend/backend)
 - Remove Prometheus monitoring
-- Stop Kubernetes cluster (minikube only)
+- Stop the cluster (Colima or minikube)
+- **Keep** your configuration files; add `--delete-config-files` to remove `.demo-config`, `se-parms.tfvars` and the state files too
 
 ### Option 2: Selective Automated Cleanup
 
 Choose specific cleanup operations:
 
 ```bash
-# Clean up only cloud resources (Harness + Docker Hub)
+# Clean up only cloud resources (your Harness resources + Docker Hub)
 ./stop-demo.sh --delete-harness-project --delete-docker-repo
 
 # Clean up cloud resources and local config (keeps K8s running)
 ./stop-demo.sh --delete-harness-project --delete-docker-repo --delete-config-files
 
-# Clean up only local resources (keeps Harness project)
+# Clean up only local resources (keeps your Harness resources)
 ./stop-demo.sh --delete-prometheus --stop-cluster --delete-config-files
 ```
 
@@ -864,8 +910,9 @@ kubectl delete namespace monitoring --ignore-not-found=true
 
 **Step 2: Delete Harness Resources**
 
-> **Important**: Delete Harness resources through the UI **before** running `terraform destroy`. This ensures proper cleanup of all dependencies.
+> **⚠️ Shared project:** in the Onboarding project, **do not** delete the project or the `partner_demo_kit` repository — they belong to everyone. Remove only your own resources (the ones ending in `_<your name/ID>`), preferably with `./stop-demo.sh` option 4, which does exactly that.
 
+For a project used only by you:
 1. Navigate to Harness UI > **Code Repository** > Manage Repository
    - Delete **"partner_demo_kit"** repository
 2. Navigate to **Projects**
@@ -896,7 +943,10 @@ git clean -dxf  # WARNING: Removes all untracked files including .tfstate files
 # For minikube
 minikube stop
 
-# For Rancher Desktop - stop through the UI
+# For Colima
+colima stop
+
+# For Rancher Desktop / Docker Desktop - stop through the UI
 ```
 
 ## Next Steps
@@ -976,7 +1026,7 @@ For questions or assistance:
 
 - **Frontend**: Angular 17 application with Harness Feature Flags integration
 - **Backend**: Django 5.0 REST API
-- **Local Kubernetes**: Rancher Desktop (recommended) or minikube
+- **Local Kubernetes**: Colima (Apple Silicon, native arm64), minikube (recommended on Windows), or Docker Desktop / Rancher Desktop
 - **Monitoring**: Prometheus for continuous verification metrics
 - **CI/CD**: Harness Cloud for builds, local K8s for deployments
 - **Image Storage**: Docker Hub
